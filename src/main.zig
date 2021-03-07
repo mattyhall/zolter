@@ -1,7 +1,7 @@
 const std = @import("std");
 const defs = @import("defs.zig");
 
-const path = "/mnt/c/Users/matth/Documents/fit_files/2019-09-22-122706-ELEMNT BOLT 9516-11-0.fit";
+const PATH = "/mnt/c/Users/matth/Documents/fit_files";
 
 const ParseError = error{
     NoMagicInHeader,
@@ -246,16 +246,13 @@ fn Parser(comptime Reader: anytype) type {
     };
 }
 
-pub fn main() !void {
+pub fn parseFile(allocator: *std.mem.Allocator, path: []const u8) !void {
     var f = try std.fs.openFileAbsolute(path, .{});
     defer f.close();
 
     var reader = std.io.bufferedReader(f.reader()).reader();
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-
-    var parser = try Parser(@TypeOf(reader)).init(&gpa.allocator, reader);
+    var parser = try Parser(@TypeOf(reader)).init(allocator, reader);
     defer parser.deinit();
 
     while (try parser.next()) |*ev| {
@@ -304,5 +301,17 @@ pub fn main() !void {
                 std.log.debug("data for file id: file_created {}, typ: {}, manufacturer: {}, product: {}, serial number: {}", .{ file_created, typ, manufacturer, product, serial_number });
             },
         }
+    }
+}
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var walker = try std.fs.walkPath(&gpa.allocator, PATH);
+    defer walker.deinit();
+    while (try walker.next()) |node| {
+        std.debug.print("path: {s}\n", .{node.path});
+        try parseFile(&gpa.allocator, node.path);
     }
 }
