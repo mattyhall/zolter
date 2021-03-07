@@ -1,3 +1,23 @@
+fn genericToString(comptime T: anytype, comptime V: anytype, i: V) []const u8 {
+    const info = @typeInfo(T);
+    switch (info) {
+        .Struct => |s| {
+            inline for (s.decls) |decl| {
+                switch (decl.data) {
+                    .Var => {},
+                    else => continue,
+                }
+                const v: V = @field(T, decl.name);
+                if (i == v) {
+                    return decl.name;
+                }
+            }
+        },
+        else => @compileError("can only be used on structs"),
+    }
+    return "unknown";
+}
+
 pub const MsgTypes = struct {
     pub const file_id = 0;
     pub const capabilities = 1;
@@ -87,29 +107,15 @@ pub const MsgTypes = struct {
     pub const dive_summary = 268;
     pub const jump = 285;
     pub const climb_pro = 317;
+
+    const Self = @This();
+
+    pub fn toString(i: u16) []const u8 {
+        return genericToString(Self, u16, i);
+    }
 };
 
-fn generic_to_string(comptime T: anytype, comptime V: anytype, i: V) []const u8 {
-    const info = @typeInfo(T);
-    switch (info) {
-        .Struct => |s| {
-            inline for (s.decls) |decl| {
-                switch (decl.data) {
-                    .Var => {},
-                    else => continue,
-                }
-                const v: V = @field(T, decl.name);
-                if (i == v) {
-                    return decl.name;
-                }
-            }
-        },
-        else => @compileError("can only be used on structs"),
-    }
-    return "unknown";
-}
-
-pub const KnownFileIdFields = struct {
+pub const FileIdFields = struct {
     pub const typ: u8 = 0;
     pub const manufacturer: u8 = 1;
     pub const product: u8 = 2;
@@ -120,8 +126,8 @@ pub const KnownFileIdFields = struct {
 
     const Self = @This();
 
-    pub fn to_string(i: u8) []const u8 {
-        return generic_to_string(Self, u8, i);
+    pub fn toString(i: u8) []const u8 {
+        return genericToString(Self, u8, i);
     }
 };
 
