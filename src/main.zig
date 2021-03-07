@@ -6,7 +6,6 @@ const path = "/mnt/c/Users/matth/Documents/fit_files/2019-09-22-122706-ELEMNT BO
 const ParseError = error{
     NoMagicInHeader,
     Eof,
-    NotNormalHeader,
     InvalidReserveBit,
     UnrecognisedLocalType,
 };
@@ -50,6 +49,7 @@ const Header = struct {
 };
 
 const Data = struct {
+    time_offset: u5,
     local_msg_type: u4,
     data: std.ArrayList(u8),
 
@@ -121,7 +121,7 @@ fn Parser(comptime Reader: anytype) type {
 
         fn parseRecordDefinition(self: *Self, dev: bool) !Definition {
             const reserved = try self.reader.readInt(u8, .Little);
-            if (reserved != 0) return ParseError.InvalidReserveBit;
+            // if (reserved != 0) return ParseError.InvalidReserveBit;
 
             var def: Definition = undefined;
             def.endian = if ((try self.reader.readInt(u8, .Little)) == 0)
@@ -164,30 +164,48 @@ fn Parser(comptime Reader: anytype) type {
         fn parseRecord(self: *Self) !Event {
             const header = try self.reader.readInt(u8, .Little);
             const header_type = header & (1 << 7);
-            if (header_type != 0) return ParseError.NotNormalHeader; // TODO: handle timestamp headers
-            const typ: MsgType = if (header & (1 << 6) != 0) .definition else .data;
-            const reserved = header & (1 << 4);
-            if (reserved != 0) return ParseError.InvalidReserveBit;
-            const local_typ = header & (0b00000111);
+            const info: struct { typ: MsgType, local_typ: u8, offset: u8 } = if (header_type != 0) blk: { // timestamp
+                const local_type = (header & (0b01100000)) >> 5;
+                const offset = header & (0b00011111);
+                break :blk .{
+                    .typ = MsgType.data,
+                    .local_typ = local_type,
+                    .offset = offset,
+                };
+            } else blk: {
+                const typ: MsgType = if (header & (1 << 6) != 0) .definition else .data;
+                const reserved = header & (1 << 4);
+                if (reserved != 0) return ParseError.InvalidReserveBit;
+                const local_typ = header & (0b00000111);
+                break :blk .{
+                    .typ = typ,
+                    .local_typ = local_typ,
+                    .offset = 0,
+                };
+            };
 
-            if (typ == .definition) {
+            if (info.typ == .definition) {
                 const dev = if (header & (1 << 5) != 0) true else false;
                 var def = try self.parseRecordDefinition(dev);
-                def.local_msg_type = @intCast(u4, local_typ);
+                def.local_msg_type = @intCast(u4, info.local_typ);
                 if (self.definitions[def.local_msg_type]) |*old_def| {
                     old_def.deinit();
                 }
                 self.definitions[def.local_msg_type] = def;
                 return Event{ .definition = def };
             } else {
-                const def = &self.definitions[local_typ];
+                const def = &self.definitions[info.local_typ];
                 _ = def.* orelse return ParseError.UnrecognisedLocalType;
                 var bytes: usize = 0;
                 for (def.*.?.fields.items) |field| {
                     bytes += field.size;
                 }
+                for (def.*.?.dev_fields.items) |field| {
+                    bytes += field.size;
+                }
                 var data = Data{
-                    .local_msg_type = @intCast(u4, local_typ),
+                    .local_msg_type = @intCast(u4, info.local_typ),
+                    .time_offset = @intCast(u5, info.offset),
                     .data = std.ArrayList(u8).init(self.allocator),
                 };
                 try data.data.resize(bytes);
@@ -222,6 +240,7 @@ pub fn main() !void {
     defer parser.deinit();
 
     while (try parser.next()) |*ev| {
+        std.log.debug("consumed: {}", .{try f.getPos()});
         switch (ev.*) {
             .header => |hdr| {
                 std.log.debug("got file header: protocol version {}, profile version {}, size {}", .{ hdr.protocol_version, hdr.profile_version, hdr.data_size });
@@ -239,6 +258,9 @@ pub fn main() !void {
                         defs.MesgNum.event => defs.EventFieldNum.toString,
                         defs.MesgNum.field_description => defs.FieldDescriptionFieldNum.toString,
                         defs.MesgNum.workout => defs.WorkoutFieldNum.toString,
+                        defs.MesgNum.capabilities => defs.CapabilitiesFieldNum.toString,
+                        defs.MesgNum.session => defs.SessionFieldNum.toString,
+                        defs.MesgNum.activity => defs.SessionFieldNum.toString,
                         else => null,
                     };
                     if (func) |to_string| {
