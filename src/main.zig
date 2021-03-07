@@ -72,6 +72,8 @@ fn Parser(comptime Reader: anytype) type {
         reader: Reader,
         allocator: *std.mem.Allocator,
         definitions: []?Definition,
+        data_consumed: u32 = 0,
+        data_size: u32 = 0,
         had_header: bool = false,
 
         const Self = @This();
@@ -98,61 +100,73 @@ fn Parser(comptime Reader: anytype) type {
             self.allocator.destroy(self.definitions.ptr);
         }
 
+        fn readInt(self: *Self, comptime T: anytype, endian: std.builtin.Endian) !T {
+            const res = try self.reader.readInt(T, endian);
+            self.data_consumed += @sizeOf(T);
+            return res;
+        }
+
+        fn read(self: *Self, slice: []u8) !usize {
+            const num_read = try self.reader.read(slice);
+            self.data_consumed += @intCast(u32, num_read);
+            return num_read;
+        }
+
         fn parseHeader(self: *Self) !Event {
-            const size = try self.reader.readInt(u8, .Little);
+            const size = try self.readInt(u8, .Little);
             var header: Header = undefined;
-            header.protocol_version = try self.reader.readInt(u8, .Little);
-            header.profile_version = try self.reader.readInt(u16, .Little);
-            header.data_size = try self.reader.readInt(u32, .Little);
+            header.protocol_version = try self.readInt(u8, .Little);
+            header.profile_version = try self.readInt(u16, .Little);
+            header.data_size = try self.readInt(u32, .Little);
             var magic_buffer: [4]u8 = undefined;
-            const read = self.reader.read(&magic_buffer) catch |err| {
+            const num_read = self.read(&magic_buffer) catch |err| {
                 return ParseError.Eof;
             };
-            if (read != 4 or !std.mem.eql(u8, ".FIT", &magic_buffer)) {
+            if (num_read != 4 or !std.mem.eql(u8, ".FIT", &magic_buffer)) {
                 return ParseError.NoMagicInHeader; // Expected ".FIT" in header
             }
 
             if (size == 14) {
                 // TODO: check this
-                const crc = try self.reader.readInt(u16, .Little);
+                const crc = try self.readInt(u16, .Little);
             }
             return Event{ .header = header };
         }
 
         fn parseRecordDefinition(self: *Self, dev: bool) !Definition {
-            const reserved = try self.reader.readInt(u8, .Little);
+            const reserved = try self.readInt(u8, .Little);
             // if (reserved != 0) return ParseError.InvalidReserveBit;
 
             var def: Definition = undefined;
-            def.endian = if ((try self.reader.readInt(u8, .Little)) == 0)
+            def.endian = if ((try self.readInt(u8, .Little)) == 0)
                 .Little
             else
                 .Big;
-            def.global_msg_type = try self.reader.readInt(u16, def.endian);
+            def.global_msg_type = try self.readInt(u16, def.endian);
 
-            const num_fields = try self.reader.readInt(u8, def.endian);
+            const num_fields = try self.readInt(u8, def.endian);
             var fields = std.ArrayList(Field).init(self.allocator);
             try fields.ensureCapacity(num_fields);
             var i: usize = 0;
             while (i < num_fields) : (i += 1) {
                 var field: Field = undefined;
-                field.field = try self.reader.readInt(u8, def.endian);
-                field.size = try self.reader.readInt(u8, def.endian);
-                field.typ = try self.reader.readInt(u8, def.endian);
+                field.field = try self.readInt(u8, def.endian);
+                field.size = try self.readInt(u8, def.endian);
+                field.typ = try self.readInt(u8, def.endian);
                 fields.appendAssumeCapacity(field);
             }
             def.fields = fields;
 
             var dev_fields = std.ArrayList(DevField).init(self.allocator);
             if (dev) {
-                const num_dev_fields = try self.reader.readInt(u8, def.endian);
+                const num_dev_fields = try self.readInt(u8, def.endian);
                 try dev_fields.ensureCapacity(num_dev_fields);
                 i = 0;
                 while (i < num_dev_fields) : (i += 1) {
                     var field: DevField = undefined;
-                    field.number = try self.reader.readInt(u8, def.endian);
-                    field.size = try self.reader.readInt(u8, def.endian);
-                    field.developer_data_index = try self.reader.readInt(u8, def.endian);
+                    field.number = try self.readInt(u8, def.endian);
+                    field.size = try self.readInt(u8, def.endian);
+                    field.developer_data_index = try self.readInt(u8, def.endian);
                     dev_fields.appendAssumeCapacity(field);
                 }
             }
@@ -162,7 +176,7 @@ fn Parser(comptime Reader: anytype) type {
         }
 
         fn parseRecord(self: *Self) !Event {
-            const header = try self.reader.readInt(u8, .Little);
+            const header = try self.readInt(u8, .Little);
             const header_type = header & (1 << 7);
             const info: struct { typ: MsgType, local_typ: u8, offset: u8 } = if (header_type != 0) blk: { // timestamp
                 const local_type = (header & (0b01100000)) >> 5;
@@ -209,8 +223,8 @@ fn Parser(comptime Reader: anytype) type {
                     .data = std.ArrayList(u8).init(self.allocator),
                 };
                 try data.data.resize(bytes);
-                const read = try self.reader.read(data.data.items);
-                if (read != bytes) {
+                const num_read = try self.read(data.data.items);
+                if (num_read != bytes) {
                     return ParseError.Eof;
                 }
                 return Event{ .data = data };
@@ -218,9 +232,14 @@ fn Parser(comptime Reader: anytype) type {
         }
 
         fn next(self: *Self) !?Event {
+            if (self.data_size != 0 and self.data_consumed >= self.data_size) {
+                return null;
+            }
             if (!self.had_header) {
                 self.had_header = true;
-                return try self.parseHeader();
+                const hdr = try self.parseHeader();
+                self.data_size = hdr.header.data_size;
+                self.data_consumed = 0;
             }
             return try self.parseRecord();
         }
@@ -240,7 +259,6 @@ pub fn main() !void {
     defer parser.deinit();
 
     while (try parser.next()) |*ev| {
-        std.log.debug("consumed: {}", .{try f.getPos()});
         switch (ev.*) {
             .header => |hdr| {
                 std.log.debug("got file header: protocol version {}, profile version {}, size {}", .{ hdr.protocol_version, hdr.profile_version, hdr.data_size });
