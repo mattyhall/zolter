@@ -229,8 +229,20 @@ pub fn main() !void {
             .definition => |*def| {
                 std.log.debug("def of type {s}", .{defs.MesgNum.toString(def.global_msg_type)});
                 for (def.fields.items) |field| {
-                    if (def.global_msg_type == defs.MesgNum.file_id) {
-                        std.log.debug("  got field {s} of size {} and type {}", .{ defs.FileIdFieldNum.toString(field.field), field.size, field.typ });
+                    const func = switch (def.global_msg_type) {
+                        defs.MesgNum.file_id => defs.FileIdFieldNum.toString,
+                        defs.MesgNum.device_info => defs.DeviceInfoFieldNum.toString,
+                        defs.MesgNum.record => defs.RecordFieldNum.toString,
+                        defs.MesgNum.sport => defs.SportFieldNum.toString,
+                        defs.MesgNum.hr_zone => defs.HrZoneFieldNum.toString,
+                        defs.MesgNum.power_zone => defs.PowerZoneFieldNum.toString,
+                        defs.MesgNum.event => defs.EventFieldNum.toString,
+                        defs.MesgNum.field_description => defs.FieldDescriptionFieldNum.toString,
+                        defs.MesgNum.workout => defs.WorkoutFieldNum.toString,
+                        else => null,
+                    };
+                    if (func) |to_string| {
+                        std.log.debug("  got field {s} of size {} and type {s}", .{ to_string(field.field), field.size, defs.FitBaseType.toString(field.typ) });
                     } else {
                         std.log.debug("  got unknown field", .{});
                     }
