@@ -25,7 +25,7 @@ const DevField = struct {
 const Field = struct {
     field: u8,
     size: u8,
-    typ: defs.Types,
+    typ: u8,
 };
 
 const Definition = struct {
@@ -138,8 +138,7 @@ fn Parser(comptime Reader: anytype) type {
                 var field: Field = undefined;
                 field.field = try self.reader.readInt(u8, def.endian);
                 field.size = try self.reader.readInt(u8, def.endian);
-                const typ = try self.reader.readInt(u8, def.endian);
-                field.typ = @intToEnum(defs.Types, typ);
+                field.typ = try self.reader.readInt(u8, def.endian);
                 fields.appendAssumeCapacity(field);
             }
             def.fields = fields;
@@ -228,10 +227,10 @@ pub fn main() !void {
                 std.log.debug("got file header: protocol version {}, profile version {}, size {}", .{ hdr.protocol_version, hdr.profile_version, hdr.data_size });
             },
             .definition => |*def| {
-                std.log.debug("def of type {s}", .{defs.MsgTypes.toString(def.global_msg_type)});
+                std.log.debug("def of type {s}", .{defs.MesgNum.toString(def.global_msg_type)});
                 for (def.fields.items) |field| {
-                    if (def.global_msg_type == defs.MsgTypes.file_id) {
-                        std.log.debug("  got field {s} of size {} and type {}", .{ defs.FileIdFields.toString(field.field), field.size, field.typ });
+                    if (def.global_msg_type == defs.MesgNum.file_id) {
+                        std.log.debug("  got field {s} of size {} and type {}", .{ defs.FileIdFieldNum.toString(field.field), field.size, field.typ });
                     } else {
                         std.log.debug("  got unknown field", .{});
                     }
@@ -240,7 +239,7 @@ pub fn main() !void {
             .data => |*data| blk: {
                 defer data.deinit();
                 const def = parser.definitions[data.local_msg_type] orelse unreachable;
-                if (def.global_msg_type != defs.MsgTypes.file_id) {
+                if (def.global_msg_type != defs.MesgNum.file_id) {
                     std.log.debug("data for local type {}", .{data.local_msg_type});
                     break :blk;
                 }
