@@ -1,7 +1,7 @@
 const std = @import("std");
 const defs = @import("defs.zig");
 
-const PATH = "/mnt/c/Users/matth/Documents/fit_files";
+const PATH = "/home/mjh/fit_files";
 
 const ParseError = error{
     NoMagicInHeader,
@@ -64,7 +64,6 @@ const Event = union(enum) {
     header: Header,
     definition: Definition,
     data: Data,
-    // TODO data record
 };
 
 fn Parser(comptime Reader: anytype) type {
@@ -288,17 +287,72 @@ pub fn parseFile(allocator: *std.mem.Allocator, path: []const u8) !void {
             .data => |*data| blk: {
                 defer data.deinit();
                 const def = parser.definitions[data.local_msg_type] orelse unreachable;
-                if (def.global_msg_type != defs.MesgNum.file_id) {
-                    std.log.debug("data for local type {}", .{data.local_msg_type});
-                    break :blk;
+                const func = switch (def.global_msg_type) {
+                    defs.MesgNum.file_id => defs.FileIdFieldNum.toString,
+                    defs.MesgNum.device_info => defs.DeviceInfoFieldNum.toString,
+                    defs.MesgNum.record => defs.RecordFieldNum.toString,
+                    defs.MesgNum.sport => defs.SportFieldNum.toString,
+                    defs.MesgNum.hr_zone => defs.HrZoneFieldNum.toString,
+                    defs.MesgNum.power_zone => defs.PowerZoneFieldNum.toString,
+                    defs.MesgNum.event => defs.EventFieldNum.toString,
+                    defs.MesgNum.field_description => defs.FieldDescriptionFieldNum.toString,
+                    defs.MesgNum.workout => defs.WorkoutFieldNum.toString,
+                    defs.MesgNum.capabilities => defs.CapabilitiesFieldNum.toString,
+                    defs.MesgNum.session => defs.SessionFieldNum.toString,
+                    defs.MesgNum.activity => defs.SessionFieldNum.toString,
+                    else => break :blk,
+                };
+                var data_reader = std.io.fixedBufferStream(data.data.items).reader();
+                var tmp_buf: [1024]u8 = undefined;
+                var end_of_tmp_buf: usize = 0;
+                for (def.fields.items) |field| {
+                    switch (field.typ) {
+                        defs.FitBaseType.uint8, defs.FitBaseType.uint8z => {
+                            end_of_tmp_buf += (try std.fmt.bufPrint(tmp_buf[end_of_tmp_buf..], "{s}: {}, ", .{ func(field.field), try data_reader.readInt(u8, def.endian) })).len;
+                        },
+                        defs.FitBaseType.sint8 => {
+                            end_of_tmp_buf += (try std.fmt.bufPrint(tmp_buf[end_of_tmp_buf..], "{s}: {}, ", .{ func(field.field), try data_reader.readInt(i8, def.endian) })).len;
+                        },
+                        defs.FitBaseType.sint16 => {
+                            end_of_tmp_buf += (try std.fmt.bufPrint(tmp_buf[end_of_tmp_buf..], "{s}: {}, ", .{ func(field.field), try data_reader.readInt(i16, def.endian) })).len;
+                        },
+                        defs.FitBaseType.sint32 => {
+                            end_of_tmp_buf += (try std.fmt.bufPrint(tmp_buf[end_of_tmp_buf..], "{s}: {}, ", .{ func(field.field), try data_reader.readInt(i32, def.endian) })).len;
+                        },
+                        defs.FitBaseType.uint32, defs.FitBaseType.uint32z => {
+                            end_of_tmp_buf += (try std.fmt.bufPrint(tmp_buf[end_of_tmp_buf..], "{s}: {}, ", .{ func(field.field), try data_reader.readInt(u32, def.endian) })).len;
+                        },
+                        defs.FitBaseType.uint16, defs.FitBaseType.uint16z => {
+                            end_of_tmp_buf += (try std.fmt.bufPrint(tmp_buf[end_of_tmp_buf..], "{s}: {}, ", .{ func(field.field), try data_reader.readInt(u16, def.endian) })).len;
+                        },
+                        defs.FitBaseType.@"enum" => {
+                            var data_bytes: [4]u8 = [_]u8{0} ** 4;
+                            _ = try data_reader.read(data_bytes[0..field.size]);
+                            var out: u32 = 0;
+                            for (data_bytes[0..field.size]) |n| {
+                                out <<= 8;
+                                out |= n;
+                            }
+                            end_of_tmp_buf += (try std.fmt.bufPrint(tmp_buf[end_of_tmp_buf..], "{s}: {}, ", .{ func(field.field), out })).len;
+                        },
+                        defs.FitBaseType.string => {
+                            var bytes = try allocator.alloc(u8, field.size);
+                            defer _ = allocator.destroy(bytes.ptr);
+                            _ = try data_reader.read(bytes);
+                            const len = std.mem.indexOf(u8, bytes, &[1]u8{0}) orelse field.size;
+                            end_of_tmp_buf += (try std.fmt.bufPrint(tmp_buf[end_of_tmp_buf..], "{s}: {s}, ", .{ func(field.field), bytes[0..len] })).len;
+                        },
+                        else => {
+                            std.log.debug("could not show type {}", .{field.typ});
+                            @panic("");
+                        },
+                    }
                 }
-                var file_id_reader = std.io.fixedBufferStream(data.data.items).reader();
-                const file_created = try file_id_reader.readInt(u32, def.endian);
-                const typ = try file_id_reader.readInt(u8, def.endian);
-                const manufacturer = try file_id_reader.readInt(u16, def.endian);
-                const product = try file_id_reader.readInt(u16, def.endian);
-                const serial_number = try file_id_reader.readInt(u32, def.endian);
-                std.log.debug("data for file id: file_created {}, typ: {}, manufacturer: {}, product: {}, serial number: {}", .{ file_created, typ, manufacturer, product, serial_number });
+                if (data.time_offset != 0) {
+                    std.log.debug("data: {s} (ts offset {})", .{ tmp_buf[0..end_of_tmp_buf], data.time_offset });
+                } else {
+                    std.log.debug("data: {s}", .{tmp_buf[0..end_of_tmp_buf]});
+                }
             },
         }
     }
@@ -313,5 +367,6 @@ pub fn main() !void {
     while (try walker.next()) |node| {
         std.debug.print("path: {s}\n", .{node.path});
         try parseFile(&gpa.allocator, node.path);
+        return;
     }
 }
