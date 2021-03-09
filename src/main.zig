@@ -96,7 +96,7 @@ fn Parser(comptime Reader: anytype) type {
                     d.deinit();
                 }
             }
-            self.allocator.destroy(self.definitions.ptr);
+            self.allocator.free(self.definitions);
         }
 
         fn readInt(self: *Self, comptime T: anytype, endian: std.builtin.Endian) !T {
@@ -245,6 +245,25 @@ fn Parser(comptime Reader: anytype) type {
     };
 }
 
+fn readArray(comptime T: type, n: usize, allocator: *std.mem.Allocator, reader: anytype, endian: std.builtin.Endian) ![]T {
+    var out: []T = try allocator.alloc(T, n);
+    for (out) |*space| {
+        space.* = try reader.readInt(T, endian);
+    }
+    return out;
+}
+
+fn printField(comptime T: type, field_name: []const u8, size: usize, allocator: *std.mem.Allocator, reader: anytype, endian: std.builtin.Endian, out_buf: []u8) !usize {
+    if (size == @sizeOf(T)) {
+        const written = try std.fmt.bufPrint(out_buf, "{s}: {}, ", .{ field_name, try reader.readInt(T, endian) });
+        return written.len;
+    }
+    const array = try readArray(T, size / @sizeOf(T), allocator, reader, endian);
+    defer allocator.free(array);
+    const written = try std.fmt.bufPrint(out_buf, "{s}: {any}, ", .{ field_name, array });
+    return written.len;
+}
+
 pub fn parseFile(allocator: *std.mem.Allocator, path: []const u8) !void {
     var f = try std.fs.openFileAbsolute(path, .{});
     defer f.close();
@@ -259,31 +278,7 @@ pub fn parseFile(allocator: *std.mem.Allocator, path: []const u8) !void {
             .header => |hdr| {
                 std.log.debug("got file header: protocol version {}, profile version {}, size {}", .{ hdr.protocol_version, hdr.profile_version, hdr.data_size });
             },
-            .definition => |*def| {
-                std.log.debug("def of type {s}", .{defs.MesgNum.toString(def.global_msg_type)});
-                for (def.fields.items) |field| {
-                    const func = switch (def.global_msg_type) {
-                        defs.MesgNum.file_id => defs.FileIdFieldNum.toString,
-                        defs.MesgNum.device_info => defs.DeviceInfoFieldNum.toString,
-                        defs.MesgNum.record => defs.RecordFieldNum.toString,
-                        defs.MesgNum.sport => defs.SportFieldNum.toString,
-                        defs.MesgNum.hr_zone => defs.HrZoneFieldNum.toString,
-                        defs.MesgNum.power_zone => defs.PowerZoneFieldNum.toString,
-                        defs.MesgNum.event => defs.EventFieldNum.toString,
-                        defs.MesgNum.field_description => defs.FieldDescriptionFieldNum.toString,
-                        defs.MesgNum.workout => defs.WorkoutFieldNum.toString,
-                        defs.MesgNum.capabilities => defs.CapabilitiesFieldNum.toString,
-                        defs.MesgNum.session => defs.SessionFieldNum.toString,
-                        defs.MesgNum.activity => defs.SessionFieldNum.toString,
-                        else => null,
-                    };
-                    if (func) |to_string| {
-                        std.log.debug("  got field {s} of size {} and type {s}", .{ to_string(field.field), field.size, defs.FitBaseType.toString(field.typ) });
-                    } else {
-                        std.log.debug("  got unknown field", .{});
-                    }
-                }
-            },
+            .definition => |*def| {},
             .data => |*data| blk: {
                 defer data.deinit();
                 const def = parser.definitions[data.local_msg_type] orelse unreachable;
@@ -308,22 +303,22 @@ pub fn parseFile(allocator: *std.mem.Allocator, path: []const u8) !void {
                 for (def.fields.items) |field| {
                     switch (field.typ) {
                         defs.FitBaseType.uint8, defs.FitBaseType.uint8z => {
-                            end_of_tmp_buf += (try std.fmt.bufPrint(tmp_buf[end_of_tmp_buf..], "{s}: {}, ", .{ func(field.field), try data_reader.readInt(u8, def.endian) })).len;
+                            end_of_tmp_buf += try printField(u8, func(field.field), field.size, allocator, data_reader, def.endian, tmp_buf[end_of_tmp_buf..]);
                         },
                         defs.FitBaseType.sint8 => {
-                            end_of_tmp_buf += (try std.fmt.bufPrint(tmp_buf[end_of_tmp_buf..], "{s}: {}, ", .{ func(field.field), try data_reader.readInt(i8, def.endian) })).len;
-                        },
-                        defs.FitBaseType.sint16 => {
-                            end_of_tmp_buf += (try std.fmt.bufPrint(tmp_buf[end_of_tmp_buf..], "{s}: {}, ", .{ func(field.field), try data_reader.readInt(i16, def.endian) })).len;
-                        },
-                        defs.FitBaseType.sint32 => {
-                            end_of_tmp_buf += (try std.fmt.bufPrint(tmp_buf[end_of_tmp_buf..], "{s}: {}, ", .{ func(field.field), try data_reader.readInt(i32, def.endian) })).len;
-                        },
-                        defs.FitBaseType.uint32, defs.FitBaseType.uint32z => {
-                            end_of_tmp_buf += (try std.fmt.bufPrint(tmp_buf[end_of_tmp_buf..], "{s}: {}, ", .{ func(field.field), try data_reader.readInt(u32, def.endian) })).len;
+                            end_of_tmp_buf += try printField(i8, func(field.field), field.size, allocator, data_reader, def.endian, tmp_buf[end_of_tmp_buf..]);
                         },
                         defs.FitBaseType.uint16, defs.FitBaseType.uint16z => {
-                            end_of_tmp_buf += (try std.fmt.bufPrint(tmp_buf[end_of_tmp_buf..], "{s}: {}, ", .{ func(field.field), try data_reader.readInt(u16, def.endian) })).len;
+                            end_of_tmp_buf += try printField(u16, func(field.field), field.size, allocator, data_reader, def.endian, tmp_buf[end_of_tmp_buf..]);
+                        },
+                        defs.FitBaseType.sint16 => {
+                            end_of_tmp_buf += try printField(i16, func(field.field), field.size, allocator, data_reader, def.endian, tmp_buf[end_of_tmp_buf..]);
+                        },
+                        defs.FitBaseType.uint32, defs.FitBaseType.uint32z => {
+                            end_of_tmp_buf += try printField(u32, func(field.field), field.size, allocator, data_reader, def.endian, tmp_buf[end_of_tmp_buf..]);
+                        },
+                        defs.FitBaseType.sint32 => {
+                            end_of_tmp_buf += try printField(i32, func(field.field), field.size, allocator, data_reader, def.endian, tmp_buf[end_of_tmp_buf..]);
                         },
                         defs.FitBaseType.@"enum" => {
                             var data_bytes: [4]u8 = [_]u8{0} ** 4;
@@ -337,7 +332,7 @@ pub fn parseFile(allocator: *std.mem.Allocator, path: []const u8) !void {
                         },
                         defs.FitBaseType.string => {
                             var bytes = try allocator.alloc(u8, field.size);
-                            defer _ = allocator.destroy(bytes.ptr);
+                            defer _ = allocator.free(bytes);
                             _ = try data_reader.read(bytes);
                             const len = std.mem.indexOf(u8, bytes, &[1]u8{0}) orelse field.size;
                             end_of_tmp_buf += (try std.fmt.bufPrint(tmp_buf[end_of_tmp_buf..], "{s}: {s}, ", .{ func(field.field), bytes[0..len] })).len;
