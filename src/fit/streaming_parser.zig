@@ -237,6 +237,7 @@ pub fn Parser(comptime Reader: anytype) type {
                 const hdr = try self.parseHeader();
                 self.data_size = hdr.header.data_size;
                 self.data_consumed = 0;
+                return hdr;
             }
             return try self.parseRecord();
         }
