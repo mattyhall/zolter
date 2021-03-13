@@ -188,6 +188,7 @@ pub const Parser = struct {
                 },
             }
         }
+        file.session = session;
         return file;
     }
 };
