@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const pkgs = @import("deps.zig").pkgs;
 
 pub fn build(b: *std.build.Builder) !void {
     const target = b.standardTargetOptions(.{});
@@ -7,6 +8,7 @@ pub fn build(b: *std.build.Builder) !void {
     const exe = b.addExecutable("zolt", "src/main.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
+    pkgs.addAllTo(exe);
     exe.install();
 
     const run_cmd = exe.run();

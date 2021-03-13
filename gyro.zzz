@@ -1,0 +1,8 @@
+deps:
+  zbox:
+    root: src/box.zig
+    src:
+      github:
+        user: jessrud
+        repo: zbox
+        ref: master

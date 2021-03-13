@@ -168,9 +168,7 @@ pub const Parser = struct {
 
         while (try parser.next()) |*ev| {
             switch (ev.*) {
-                .header => |hdr| {
-                    std.log.debug("got file header: protocol version {}, profile version {}, size {}", .{ hdr.protocol_version, hdr.profile_version, hdr.data_size });
-                },
+                .header => |hdr| {},
                 .definition => |*def| {},
                 .data => |*data| blk: {
                     defer data.deinit();
@@ -178,7 +176,6 @@ pub const Parser = struct {
                     var data_reader = std.io.fixedBufferStream(data.data.items).reader();
                     switch (def.global_msg_type) {
                         defs.MesgNum.file_id => {
-                            std.log.debug("got file id", .{});
                             comptime const mappings = generateMappings(FileId, defs.FileIdFieldNum);
                             try parseFields(FileId, data_reader, mappings, def.fields.items, &file_id, def.endian);
                         },
@@ -191,8 +188,6 @@ pub const Parser = struct {
                 },
             }
         }
-        std.log.debug("finished", .{});
-        std.log.debug("got session: {any}", .{session});
         return file;
     }
 };
