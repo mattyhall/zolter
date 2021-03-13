@@ -1,9 +1,15 @@
 const std = @import("std");
 const fit = @import("fit/fit.zig");
 const ui = @import("ui.zig");
+const units = @import("units.zig");
 const zbox = @import("zbox");
 
 const PATH = "/home/mjh/fit_files";
+
+fn parseVal(comptime T: type, comptime metric: units.Metric, value: anytype) units.UnittedType(T, metric.standard()) {
+    const v = @intToFloat(T, value);
+    return units.parseVal(T, metric, v);
+}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -80,14 +86,14 @@ pub fn main() !void {
         var cursor = rest_para.wrappedCursorAt(0, 0);
         var writer = cursor.writer();
         try writer.print("{s}\n", .{paths.items[list.selected]});
-        try writer.print("Distance: {d:.2}km\n", .{@intToFloat(f32, file.session.total_distance) / 100000.0});
-        try writer.print("Moving time: {}m\n", .{file.session.total_elapsed_time / (1000 * 60)});
-        const speed_ms = @intToFloat(f32, file.session.avg_speed) / 1000.0;
-        try writer.print("Avg speed: {d:.2}kph\n", .{(speed_ms * 60 * 60) / 1000.0});
-        try writer.print("Avg heart rate: {}bpm\n", .{file.session.avg_heart_rate});
-        try writer.print("Min heart rate: {}bpm\n", .{file.session.min_heart_rate});
-        try writer.print("Max heart rate: {}bpm\n", .{file.session.max_heart_rate});
-        try writer.print("Average temperature: {}°C\n", .{file.session.avg_temperature});
+        try parseVal(f32, .distance, file.session.total_distance).printUnit(writer, "Distance: {d:.2}{s}\n", .miles);
+        try parseVal(f32, .time, file.session.total_timer_time).printTime(writer, "Moving time: {s}\n");
+        try parseVal(f32, .time, file.session.total_elapsed_time).printTime(writer, "Total time: {s}\n");
+        try parseVal(f32, .speed, file.session.avg_speed).printUnit(writer, "Avg speed: {d:.2}{s}\n", .mph);
+        try parseVal(f16, .frequency, file.session.avg_heart_rate).printUnit(writer, "Avg heart rate: {d:.0}{s}\n", .bpm);
+        try parseVal(f16, .frequency, file.session.min_heart_rate).printUnit(writer, "Min heart rate: {d:.0}{s}\n", .bpm);
+        try parseVal(f16, .frequency, file.session.max_heart_rate).printUnit(writer, "Max heart rate: {d:.0}{s}\n", .bpm);
+        try parseVal(f16, .temperature, file.session.avg_temperature).printUnit(writer, "Avg temperature: {d:.0}{s}\n", .celcius);
         rest.blit(rest_para, 1, 1);
 
         output.blit(rest, 0, @intCast(isize, list_width + 1));
