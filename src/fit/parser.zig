@@ -33,73 +33,53 @@ pub const File = struct {
     session: Session,
 };
 
-fn FieldInfo(comptime Struct: type, comptime FieldType: type) type {
-    return struct {
-        name: []const u8,
-        field_num: u16,
-
-        const Self = @This();
-
-        fn get(comptime self: *const Self, parent: *Struct) *FieldType {
-            return &@field(parent, self.name);
-        }
-    };
-}
-
-fn FieldMappings(comptime Struct: type) type {
-    return struct {
-        u8s: ?[]const FieldInfo(Struct, u8) = null,
-        i8s: ?[]const FieldInfo(Struct, i8) = null,
-        u16s: ?[]const FieldInfo(Struct, u16) = null,
-        i16s: ?[]const FieldInfo(Struct, i16) = null,
-        u32s: ?[]const FieldInfo(Struct, u32) = null,
-        i32s: ?[]const FieldInfo(Struct, i32) = null,
-    };
-}
-
-fn generateMappingsType(comptime Struct: type, comptime info: *const std.builtin.TypeInfo.Struct, comptime FieldNums: anytype, comptime T: anytype) ?[]const FieldInfo(Struct, T) {
-    comptime var n = 0;
-    var mappings: [16]FieldInfo(Struct, T) = undefined;
-    inline for (info.fields) |field| {
-        if (field.field_type == T) {
-            mappings[n] = .{ .name = field.name, .field_num = @field(FieldNums, field.name) };
-            n += 1;
-        }
+// Find fields in Struct that are of type T
+fn findFieldsOfType(comptime Struct: type, comptime T: type) [][]const u8 {
+    comptime var fields: [16][]const u8 = undefined;
+    comptime var i = 0;
+    switch (@typeInfo(Struct)) {
+        .Struct => |si| {
+            inline for (si.fields) |field| {
+                if (field.field_type == T) {
+                    fields[i] = field.name;
+                    i += 1;
+                    if (i == 16) {
+                        @compileError("Too many fields of the same type");
+                    }
+                }
+            }
+        },
+        else => @compileError("Struct must be a struct"),
     }
-    if (n == 0) {
-        return null;
-    }
-    return mappings[0..n];
+    return fields[0..i];
 }
 
-fn generateMappings(comptime Struct: anytype, comptime FieldNums: anytype) FieldMappings(Struct) {
-    const struct_info = switch (@typeInfo(Struct)) {
-        .Struct => |si| si,
-        else => @compileError("only works with structs"),
+fn findFieldNumDecl(comptime FieldNums: type, field_num: u16) ?[]const u8 {
+    const field_name = switch (@typeInfo(FieldNums)) {
+        .Struct => |si| {
+            inline for (si.decls) |decl| {
+                switch (decl.data) {
+                    .Var => {},
+                    else => continue,
+                }
+                const n = @field(FieldNums, decl.name);
+                if (field_num == n) {
+                    return decl.name;
+                }
+            }
+        },
+        else => @compileError("FieldNums must be a struct of constants"),
     };
-    return .{
-        .u8s = generateMappingsType(Struct, &struct_info, FieldNums, u8),
-        .i8s = generateMappingsType(Struct, &struct_info, FieldNums, i8),
-        .u16s = generateMappingsType(Struct, &struct_info, FieldNums, u16),
-        .i16s = generateMappingsType(Struct, &struct_info, FieldNums, i16),
-        .u32s = generateMappingsType(Struct, &struct_info, FieldNums, u32),
-        .i32s = generateMappingsType(Struct, &struct_info, FieldNums, i32),
-    };
+    return null;
 }
 
-fn fufillMapping(comptime Struct: type, comptime T: type, comptime mappings: FieldMappings(Struct), s: *Struct, v: T, field_num: u16) void {
-    const typ_mappings: []const FieldInfo(Struct, T) = switch (T) {
-        u8 => mappings.u8s,
-        i8 => mappings.i8s,
-        u16 => mappings.u16s,
-        i16 => mappings.i16s,
-        u32 => mappings.u32s,
-        i32 => mappings.i32s,
-        else => @panic("unexpected type"),
-    } orelse return;
-    inline for (typ_mappings) |map| {
-        if (map.field_num == field_num) {
-            map.get(s).* = v;
+fn assignField(comptime Struct: type, comptime T: type, comptime FieldNums: type, dest: *Struct, val: T, field_num: u16) void {
+    comptime const fields = findFieldsOfType(Struct, T);
+    const field_name = findFieldNumDecl(FieldNums, field_num) orelse unreachable;
+    inline for (fields) |field| {
+        if (std.mem.eql(u8, field, field_name)) {
+            @field(dest, field) = val;
+            return;
         }
     }
 }
@@ -115,32 +95,32 @@ fn readField(reader: anytype, comptime T: type, size: u8, endian: std.builtin.En
     return data[0..n];
 }
 
-fn parseFields(comptime Struct: type, reader: anytype, comptime mappings: FieldMappings(Struct), fields: []const streaming_parser.Field, dest: *Struct, endian: std.builtin.Endian) !void {
+fn parseFields(comptime Struct: type, reader: anytype, fields: []const streaming_parser.Field, dest: *Struct, endian: std.builtin.Endian, comptime FieldNums: type) !void {
     for (fields) |*field| {
         switch (field.typ) {
             defs.FitBaseType.uint8, defs.FitBaseType.uint8z => {
                 const res = try readField(reader, u8, field.size, endian);
-                fufillMapping(Struct, u8, mappings, dest, res[0], field.field);
+                assignField(Struct, u8, FieldNums, dest, res[0], field.field);
             },
             defs.FitBaseType.sint8 => {
                 const res = try readField(reader, i8, field.size, endian);
-                fufillMapping(Struct, i8, mappings, dest, res[0], field.field);
+                assignField(Struct, i8, FieldNums, dest, res[0], field.field);
             },
             defs.FitBaseType.uint16, defs.FitBaseType.uint16z => {
                 const res = try readField(reader, u16, field.size, endian);
-                fufillMapping(Struct, u16, mappings, dest, res[0], field.field);
+                assignField(Struct, u16, FieldNums, dest, res[0], field.field);
             },
             defs.FitBaseType.sint16 => {
                 const res = try readField(reader, i16, field.size, endian);
-                fufillMapping(Struct, i16, mappings, dest, res[0], field.field);
+                assignField(Struct, i16, FieldNums, dest, res[0], field.field);
             },
             defs.FitBaseType.uint32, defs.FitBaseType.uint32z => {
                 const res = try readField(reader, u32, field.size, endian);
-                fufillMapping(Struct, u32, mappings, dest, res[0], field.field);
+                assignField(Struct, u32, FieldNums, dest, res[0], field.field);
             },
             defs.FitBaseType.sint32 => {
                 const res = try readField(reader, i32, field.size, endian);
-                fufillMapping(Struct, i32, mappings, dest, res[0], field.field);
+                assignField(Struct, i32, FieldNums, dest, res[0], field.field);
             },
             defs.FitBaseType.@"enum" => {
                 var data_bytes: [4]u8 = [_]u8{0} ** 4;
@@ -176,12 +156,10 @@ pub const Parser = struct {
                     var data_reader = std.io.fixedBufferStream(data.data.items).reader();
                     switch (def.global_msg_type) {
                         defs.MesgNum.file_id => {
-                            comptime const mappings = generateMappings(FileId, defs.FileIdFieldNum);
-                            try parseFields(FileId, data_reader, mappings, def.fields.items, &file_id, def.endian);
+                            try parseFields(FileId, data_reader, def.fields.items, &file_id, def.endian, defs.FileIdFieldNum);
                         },
                         defs.MesgNum.session => {
-                            comptime const mappings = generateMappings(Session, defs.SessionFieldNum);
-                            try parseFields(Session, data_reader, mappings, def.fields.items, &session, def.endian);
+                            try parseFields(Session, data_reader, def.fields.items, &session, def.endian, defs.SessionFieldNum);
                         },
                         else => break :blk,
                     }
