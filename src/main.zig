@@ -30,16 +30,13 @@ const Bar = struct {
 const BarGraph = struct {
     allocator: *std.mem.Allocator,
     values: std.ArrayList(Bar),
-    max: f32,
+    max_val: f32,
+    max_label_cols: usize,
 
     const Self = @This();
 
     fn init(allocator: *std.mem.Allocator) Self {
-        return .{
-            .allocator = allocator,
-            .values = std.ArrayList(Bar).init(allocator),
-            .max = 0.0,
-        };
+        return .{ .allocator = allocator, .values = std.ArrayList(Bar).init(allocator), .max_val = 0.0, .max_label_cols = 0 };
     }
 
     // Must be added in the order you want them to appear
@@ -48,17 +45,19 @@ const BarGraph = struct {
         try x_label.writer().print(x_fmt_string, x_args);
         var y_label = std.ArrayList(u8).init(self.allocator);
         try y_label.writer().print(y_fmt_string, y_args);
+        const label_cols = x_label.items.len + y_label.items.len;
         try self.values.append(.{
             .x_label = x_label.toOwnedSlice(),
             .y_label = y_label.toOwnedSlice(),
             .y = y,
         });
-        if (y > self.max) self.max = y;
+        if (y > self.max_val) self.max_val = y;
+        if (label_cols > self.max_label_cols) self.max_label_cols = label_cols;
     }
 
     // TODO: just take a buffer here and use its width and height
     fn draw(self: *const Self, output: *zbox.Buffer, height: usize, width: usize) !void {
-        const each_column_val = self.max / @intToFloat(f32, width);
+        const each_column_val = self.max_val / @intToFloat(f32, width - self.max_label_cols - 3);
         var cursor = output.cursorAt(0, 0);
         for (self.values.items) |bar| {
             try cursor.writer().print(" {s} ", .{bar.x_label});
@@ -272,6 +271,11 @@ pub fn main() !void {
     var distances_by_year = try getDistancesByYear(&gpa.allocator, files.items);
     defer distances_by_year.deinit();
 
+    var left = try zbox.Buffer.init(&gpa.allocator, size.height, size.width / 2);
+    defer left.deinit();
+    var right = try zbox.Buffer.init(&gpa.allocator, size.height, size.width / 2);
+    defer right.deinit();
+
     while (try zbox.nextEvent()) |e| {
         output.clear();
 
@@ -280,8 +284,13 @@ pub fn main() !void {
         try output.resize(size.height, size.width);
 
         const width = size.width / 2;
-        try distances_by_month.draw(&output, size.height, width);
-        // try distances_by_year.draw(&output, size.height, width);
+        try left.resize(size.height, width);
+        try right.resize(size.height, width);
+        try distances_by_month.draw(&left, size.height, width);
+        try distances_by_year.draw(&right, size.height, width);
+
+        output.blit(left, 0, 0);
+        output.blit(right, 0, @intCast(isize, width));
 
         // try list_view.draw(&output);
 
