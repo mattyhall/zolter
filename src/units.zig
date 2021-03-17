@@ -90,6 +90,14 @@ pub fn UnittedType(comptime T: type, comptime unit: Unit) type {
             };
         }
 
+        pub fn toUnit(self: *const Self, to: Unit) !T {
+            if (unit.metric() != to.metric()) {
+                return error.InvalidUnit;
+            }
+            const standard = self.toStandard();
+            return standardTo(T, standard.value, to);
+        }
+
         pub fn printTime(self: *const Self, writer: anytype, comptime fmt: comptime []const u8) !void {
             if (comptime unit.metric() != .time) {
                 @compileError("can't call printTime on non-time value");

@@ -21,16 +21,134 @@ fn sort(context: void, lhs: FileAndPath, rhs: FileAndPath) bool {
     return lhs.file.session.start_time > rhs.file.session.start_time;
 }
 
-fn getDistancesByYear(allocator: *std.mem.Allocator, files: []const fit.File) !std.AutoArrayHashMap(u16, u32) {
-    var hm = std.AutoArrayHashMap(u16, u32).init(allocator);
+const Bar = struct {
+    x_label: []const u8,
+    y: f32,
+    y_label: []const u8,
+};
+
+const BarGraph = struct {
+    allocator: *std.mem.Allocator,
+    values: std.ArrayList(Bar),
+    max: f32,
+
+    const Self = @This();
+
+    fn init(allocator: *std.mem.Allocator) Self {
+        return .{
+            .allocator = allocator,
+            .values = std.ArrayList(Bar).init(allocator),
+            .max = 0.0,
+        };
+    }
+
+    // Must be added in the order you want them to appear
+    fn add(self: *Self, comptime x_fmt_string: []const u8, x_args: anytype, y: f32, comptime y_fmt_string: []const u8, y_args: anytype) !void {
+        var x_label = std.ArrayList(u8).init(self.allocator);
+        try x_label.writer().print(x_fmt_string, x_args);
+        var y_label = std.ArrayList(u8).init(self.allocator);
+        try y_label.writer().print(y_fmt_string, y_args);
+        try self.values.append(.{
+            .x_label = x_label.toOwnedSlice(),
+            .y_label = y_label.toOwnedSlice(),
+            .y = y,
+        });
+        if (y > self.max) self.max = y;
+    }
+
+    // TODO: just take a buffer here and use its width and height
+    fn draw(self: *const Self, output: *zbox.Buffer, height: usize, width: usize) !void {
+        const each_column_val = self.max / @intToFloat(f32, width);
+        var cursor = output.cursorAt(0, 0);
+        for (self.values.items) |bar| {
+            try cursor.writer().print(" {s} ", .{bar.x_label});
+            const bar_width = @floatToInt(u32, bar.y / each_column_val);
+            var i: usize = 0;
+            cursor.attribs.fg_white = false;
+            cursor.attribs.fg_cyan = true;
+            while (i < bar_width) : (i += 1) {
+                _ = try cursor.writer().write("▇");
+            }
+            cursor.attribs.fg_white = true;
+            cursor.attribs.fg_cyan = false;
+            try cursor.writer().print(" {s}\n", .{bar.y_label});
+            if (cursor.row_num >= height) {
+                break;
+            }
+        }
+    }
+
+    fn deinit(self: *Self) void {
+        for (self.values.items) |*v| {
+            self.allocator.free(v.x_label);
+            self.allocator.free(v.y_label);
+        }
+        self.values.deinit();
+    }
+};
+
+fn getDistancesByMonth(allocator: *std.mem.Allocator, files: []const fit.File) !BarGraph {
+    var last_date = dt.Date.fromSeconds(0);
+    var val: u32 = 0;
+    var bar_graph = BarGraph.init(allocator);
     for (files) |f| {
         const corrected_ts = f.session.start_time + fit.GARMIN_EPOCH;
-        const year = dt.Date.fromSeconds(@intToFloat(f64, corrected_ts)).year;
-        var e = try hm.getOrPut(year);
-        if (!e.found_existing) e.entry.value = 0;
-        e.entry.value += f.session.total_distance;
+        const datetime = dt.Date.fromSeconds(@intToFloat(f64, corrected_ts));
+        const start_of_month = datetime.shiftDays(-@intCast(i16, datetime.day - 1));
+        if (!start_of_month.eql(last_date)) {
+            if (last_date.toSeconds() != 0) {
+                const miles = try parseVal(f32, .distance, val).toUnit(.miles);
+                try bar_graph.add(" {d:0>2}/{d:0>2}", .{
+                    last_date.month,
+                    last_date.year - 2000,
+                }, miles, "{d:.2}{s}", .{
+                    miles,
+                    units.Unit.miles.toString(),
+                });
+            }
+
+            last_date = start_of_month;
+            val = f.session.total_distance;
+            continue;
+        }
+        val += f.session.total_distance;
     }
-    return hm;
+    return bar_graph;
+}
+
+fn getDistancesByYear(allocator: *std.mem.Allocator, files: []const fit.File) !BarGraph {
+    var last_date = dt.Date.fromSeconds(0);
+    var val: u32 = 0;
+    var bar_graph = BarGraph.init(allocator);
+    for (files) |f| {
+        const corrected_ts = f.session.start_time + fit.GARMIN_EPOCH;
+        var datetime = dt.Date.fromSeconds(@intToFloat(f64, corrected_ts));
+        datetime.day = 1;
+        datetime.month = 1;
+        if (!datetime.eql(last_date)) {
+            if (last_date.toSeconds() != 0) {
+                const miles = try parseVal(f32, .distance, val).toUnit(.miles);
+                try bar_graph.add(" {} ", .{last_date.year}, miles, "{d:.2}{s}", .{
+                    miles,
+                    units.Unit.miles.toString(),
+                });
+            }
+
+            last_date = datetime;
+            val = f.session.total_distance;
+            continue;
+        }
+        val += f.session.total_distance;
+    }
+
+    if (last_date.toSeconds() != 0) {
+        const miles = try parseVal(f32, .distance, val).toUnit(.miles);
+        try bar_graph.add(" {} ", .{last_date.year}, miles, "{d:.2}{s}", .{
+            miles,
+            units.Unit.miles.toString(),
+        });
+    }
+    return bar_graph;
 }
 
 const ListView = struct {
@@ -149,15 +267,10 @@ pub fn main() !void {
     var list_view = try ListView.init(&gpa.allocator, paths.items, files.items);
     defer list_view.deinit();
 
+    var distances_by_month = try getDistancesByMonth(&gpa.allocator, files.items);
+    defer distances_by_month.deinit();
     var distances_by_year = try getDistancesByYear(&gpa.allocator, files.items);
     defer distances_by_year.deinit();
-
-    var max_distance: u32 = 0;
-    for (distances_by_year.items()) |entry| {
-        if (entry.value > max_distance) {
-            max_distance = entry.value;
-        }
-    }
 
     while (try zbox.nextEvent()) |e| {
         output.clear();
@@ -167,22 +280,8 @@ pub fn main() !void {
         try output.resize(size.height, size.width);
 
         const width = size.width / 2;
-        var cursor = output.cursorAt(0, 0);
-        const each_column_val = @intToFloat(f32, max_distance) / @intToFloat(f32, width);
-        for (distances_by_year.items()) |entry| {
-            try cursor.writer().print(" {} ", .{entry.key});
-            const bar_width = @floatToInt(u32, @intToFloat(f32, entry.value) / each_column_val);
-            var i: usize = 0;
-            cursor.attribs.fg_white = false;
-            cursor.attribs.fg_cyan = true;
-            while (i < bar_width) : (i += 1) {
-                _ = try cursor.writer().write("▇");
-            }
-            cursor.attribs.fg_white = true;
-            cursor.attribs.fg_cyan = false;
-            try parseVal(f32, .distance, entry.value).printUnit(cursor.writer(), " {d:.2}{s}", .miles);
-            _ = try cursor.writer().write("\n");
-        }
+        try distances_by_month.draw(&output, size.height, width);
+        // try distances_by_year.draw(&output, size.height, width);
 
         // try list_view.draw(&output);
 
