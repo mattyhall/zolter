@@ -5,6 +5,8 @@ const units = @import("units.zig");
 const zbox = @import("zbox");
 const dt = @import("datetime");
 
+usingnamespace @import("log_handler.zig");
+
 const PATH = "/home/mjh/fit_files";
 
 const FileAndPath = struct {
