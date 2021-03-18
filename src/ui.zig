@@ -1,34 +1,38 @@
 const std = @import("std");
 const zbox = @import("zbox");
 
-pub fn drawBox(buf: *zbox.Buffer) !void {
-    var cursor = buf.cursorAt(0, 0);
+pub fn drawBoxRect(buf: *zbox.Buffer, y: usize, x: usize, height: usize, width: usize) !void {
+    var cursor = buf.cursorAt(y, x);
     var writer = cursor.writer();
     try writer.writeAll("┌");
     var i: usize = 0;
-    while (i < buf.width - 2) : (i += 1) {
+    while (i < width - 2) : (i += 1) {
         try writer.writeAll("─");
     }
     try writer.writeAll("┐");
 
     i = 1;
     while (i < buf.height - 1) : (i += 1) {
-        cursor = buf.cursorAt(i, 0);
+        cursor = buf.cursorAt(y + i, x);
         writer = cursor.writer();
         try writer.writeAll("│");
-        cursor = buf.cursorAt(i, buf.width - 1);
+        cursor = buf.cursorAt(y + i, x + width - 1);
         writer = cursor.writer();
         try writer.writeAll("│");
     }
 
-    cursor = buf.cursorAt(buf.height - 1, 0);
+    cursor = buf.cursorAt(height - 1, x);
     writer = cursor.writer();
     try writer.writeAll("└");
     i = 0;
-    while (i < buf.width - 2) : (i += 1) {
+    while (i < width - 2) : (i += 1) {
         try writer.writeAll("─");
     }
     try writer.writeAll("┘");
+}
+
+pub fn drawBoxBuf(buf: *zbox.Buffer) !void {
+    return drawBoxRect(buf, 0, 0, buf.height, buf.width);
 }
 
 pub const List = struct {
@@ -57,7 +61,7 @@ pub const List = struct {
 
     pub fn draw(self: *Self) !void {
         self.buf.clear();
-        try drawBox(&self.buf);
+        try drawBoxBuf(&self.buf);
 
         const usable_height = self.buf.height - 2;
         const usable_width = self.buf.width - 2;

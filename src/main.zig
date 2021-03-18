@@ -156,7 +156,6 @@ const ListView = struct {
     allocator: *std.mem.Allocator,
     list: ui.List,
     rest: zbox.Buffer,
-    rest_para: zbox.Buffer,
     paths: [][]const u8,
     files: []const fit.File,
 
@@ -166,9 +165,8 @@ const ListView = struct {
         const size = try zbox.size();
         var list = try ui.List.init(allocator, paths);
         var rest = try zbox.Buffer.init(allocator, size.height, 2 * size.width / 3);
-        var rest_para = try zbox.Buffer.init(allocator, size.height, 2 * size.width / 3);
 
-        return Self{ .allocator = allocator, .list = list, .rest = rest, .rest_para = rest_para, .paths = paths, .files = files };
+        return Self{ .allocator = allocator, .list = list, .rest = rest, .paths = paths, .files = files };
     }
 
     fn draw(self: *Self, output: *zbox.Buffer) !void {
@@ -179,13 +177,9 @@ const ListView = struct {
         output.blit(self.list.buf, 0, 1);
 
         self.rest.clear();
-        try self.rest.resize(size.height, list_width * 2 - 1);
-        try ui.drawBox(&self.rest);
-
-        self.rest_para.clear();
-        try self.rest_para.resize(size.height - 2, list_width * 2 - 3);
+        try self.rest.resize(size.height - 2, list_width * 2 - 3);
         const file = &self.files[self.list.selected];
-        var cursor = self.rest_para.wrappedCursorAt(0, 0);
+        var cursor = self.rest.wrappedCursorAt(0, 0);
         var writer = cursor.writer();
         try writer.print("{s}\n", .{self.paths[self.list.selected]});
         try parseVal(f32, .distance, file.session.total_distance).printUnit(writer, "Distance: {d:.2}{s}\n", .miles);
@@ -196,9 +190,8 @@ const ListView = struct {
         try parseVal(f16, .frequency, file.session.min_heart_rate).printUnit(writer, "Min heart rate: {d:.0}{s}\n", .bpm);
         try parseVal(f16, .frequency, file.session.max_heart_rate).printUnit(writer, "Max heart rate: {d:.0}{s}\n", .bpm);
         try parseVal(f16, .temperature, file.session.avg_temperature).printUnit(writer, "Avg temperature: {d:.0}{s}\n", .celcius);
-        self.rest.blit(self.rest_para, 1, 1);
-
-        output.blit(self.rest, 0, @intCast(isize, list_width + 1));
+        output.blit(self.rest, 1, @intCast(isize, list_width + 2));
+        try ui.drawBoxRect(output, 0, list_width + 1, size.height, list_width * 2 - 1);
     }
 
     fn handleInput(self: *Self, e: zbox.Event) void {
@@ -207,7 +200,6 @@ const ListView = struct {
 
     fn deinit(self: *Self) void {
         self.rest.deinit();
-        self.rest_para.deinit();
         self.list.deinit();
     }
 };
@@ -312,19 +304,17 @@ pub fn main() !void {
 
         switch (view) {
             .help => {
-                var cursor = output.cursorAt(0, 0);
                 const max_line_width = getLinesMaxLen(HELP_TEXT[0..]);
                 const left_pos = size.width / 2 - max_line_width / 2;
                 const y_center = size.height / 2 - HELP_TEXT.len / 2;
-                var i: usize = 0;
-                while (i < y_center) : (i += 1) {
-                    try cursor.writer().print("\n", .{});
-                }
+                var cursor = output.cursorAt(y_center, 0);
                 for (HELP_TEXT) |line| {
+                    cursor.col_num = left_pos;
                     var tmp: [1024]u8 = undefined;
-                    const res = try std.fmt.bufPrint(&tmp, "{s: <[1]}", .{ "", left_pos });
-                    try cursor.writer().print("{s}{s}\n", .{ res, line });
+                    try cursor.writer().print("{s}\n", .{line});
                 }
+
+                try ui.drawBoxRect(&output, 0, 1, output.height, output.width - 1);
             },
             .files => try list_view.draw(&output),
             .summary => {
