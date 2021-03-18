@@ -212,6 +212,29 @@ const ListView = struct {
     }
 };
 
+const HELP_TEXT: [6][]const u8 = .{
+    "Welcome to zolter, a program to track your bike rides",
+    "",
+    "Views (accessed by given function key):",
+    "F1: This help screen",
+    "F2: Summary of all rides (bar charts of distance)",
+    "F3: Individual files",
+};
+
+fn getLinesMaxLen(lines: []const []const u8) usize {
+    var max: usize = 0;
+    for (lines) |l| {
+        if (l.len > max) max = l.len;
+    }
+    return max;
+}
+
+const View = enum {
+    help,
+    summary,
+    files,
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -278,6 +301,8 @@ pub fn main() !void {
     var right = try zbox.Buffer.init(&gpa.allocator, size.height, size.width / 2);
     defer right.deinit();
 
+    var view = View.help;
+
     while (try zbox.nextEvent()) |e| {
         output.clear();
 
@@ -285,21 +310,48 @@ pub fn main() !void {
 
         try output.resize(size.height, size.width);
 
-        const width = size.width / 2;
-        try left.resize(size.height, width);
-        try right.resize(size.height, width);
-        try distances_by_month.draw(&left, size.height, width);
-        try distances_by_year.draw(&right, size.height, width);
+        switch (view) {
+            .help => {
+                var cursor = output.cursorAt(0, 0);
+                const max_line_width = getLinesMaxLen(HELP_TEXT[0..]);
+                const left_pos = size.width / 2 - max_line_width / 2;
+                const y_center = size.height / 2 - HELP_TEXT.len / 2;
+                var i: usize = 0;
+                while (i < y_center) : (i += 1) {
+                    try cursor.writer().print("\n", .{});
+                }
+                for (HELP_TEXT) |line| {
+                    var tmp: [1024]u8 = undefined;
+                    const res = try std.fmt.bufPrint(&tmp, "{s: <[1]}", .{ "", left_pos });
+                    try cursor.writer().print("{s}{s}\n", .{ res, line });
+                }
+            },
+            .files => try list_view.draw(&output),
+            .summary => {
+                const width = size.width / 2;
+                try left.resize(size.height, width);
+                try right.resize(size.height, width);
+                try distances_by_month.draw(&left, size.height, width);
+                try distances_by_year.draw(&right, size.height, width);
 
-        output.blit(left, 0, 0);
-        output.blit(right, 0, @intCast(isize, width));
-
-        // try list_view.draw(&output);
+                output.blit(left, 0, 0);
+                output.blit(right, 0, @intCast(isize, width));
+            },
+        }
 
         try zbox.push(output);
 
         switch (e) {
             .escape => return,
+            .other => |s| {
+                if (std.mem.eql(u8, "\x1bOP", s)) {
+                    view = .help;
+                } else if (std.mem.eql(u8, "\x1bOQ", s)) {
+                    view = .summary;
+                } else if (std.mem.eql(u8, "\x1bOR", s)) {
+                    view = .files;
+                }
+            },
             else => list_view.handleInput(e),
         }
     }
