@@ -13,3 +13,10 @@ deps:
         user: frmdstryr
         repo: zig-datetime
         ref: master
+  sqlite:
+    src:
+      github:
+        user: vrischmann
+        repo: zig-sqlite
+        ref: master
+    root: sqlite.zig
