@@ -1,6 +1,7 @@
 const std = @import("std");
 const sqlite = @import("sqlite");
 const units = @import("units.zig");
+const fit = @import("fit/fit.zig");
 
 const logger = std.log.scoped(.db);
 
@@ -24,7 +25,6 @@ const SETTING_DEFAULTS: [4]Setting = .{
 
 const TABLES: [2][]const u8 = .{
     \\CREATE TABLE IF NOT EXISTS activity (
-    \\  id                 INTEGER PRIMARY KEY NOT NULL,
     \\  name               TEXT NOT NULL,
     \\  start_time         INTEGER NOT NULL,
     \\  total_elapsed_time INTEGER NOT NULL,
@@ -33,6 +33,7 @@ const TABLES: [2][]const u8 = .{
     \\  max_speed          INTEGER NOT NULL,
     \\  total_distance     INTEGER NOT NULL,
     \\  avg_cadence        INTEGER,
+    \\  max_cadence        INTEGER,
     \\  min_heart_rate     INTEGER,
     \\  max_heart_rate     INTEGER,
     \\  avg_heart_rate     INTEGER,
@@ -46,7 +47,10 @@ const TABLES: [2][]const u8 = .{
     \\  avg_temperature    INTEGER,
     \\  max_temperature    INTEGER,
     \\  total_ascent       INTEGER,
-    \\  total_descent      INTEGER);
+    \\  total_descent      INTEGER,
+    \\
+    \\  PRIMARY KEY(name, start_time)
+    \\);
     ,
     \\CREATE TABLE IF NOT EXISTS settings (
     \\  key INTEGER NOT NULL,
@@ -56,12 +60,15 @@ const TABLES: [2][]const u8 = .{
 const SET_SETTING = "INSERT INTO settings (key, value) VALUES (?, ?);";
 const GET_SETTING = "SELECT value FROM settings WHERE key=?;";
 
-const ACTIVITY_INSERT =
+const INSERT_ACTIVITY =
     \\INSERT INTO activity (name, start_time, total_elapsed_time, total_timer_time, avg_speed, max_speed, 
-    \\  total_distance, avg_cadence, min_heart_rate, max_heart_rate, avg_heart_rate, min_altitude, max_altitude,
+    \\  total_distance, avg_cadence, max_cadence, min_heart_rate, max_heart_rate, avg_heart_rate, min_altitude, max_altitude,
     \\  avg_altitude, max_neg_grade, avg_grade, max_pos_grade, total_calories, avg_temperature, max_temperature,
-    \\  total_ascent, total_descent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    \\  total_ascent, total_descent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 ;
+
+const GET_ACTIVITY = "SELECT * FROM activity WHERE name = ? AND start_time = ? LIMIT 1;";
+const EXISTS_ACTIVITY = "SELECT start_time FROM activity WHERE (name = ? OR total_distance = ?) AND start_time = ? LIMIT 1;";
 
 fn create(db: *sqlite.Db) !void {
     @setEvalBranchQuota(5000);
@@ -129,4 +136,87 @@ pub fn openDb() !sqlite.Db {
     try createOrMigrate(&db);
 
     return db;
+}
+
+pub const Activity = struct {
+    name: []const u8,
+    start_time: u32 = 0,
+    total_elapsed_time: u32 = 0,
+    total_timer_time: u32 = 0,
+    avg_speed: u16 = 0,
+    max_speed: u16 = 0,
+    total_distance: u32 = 0,
+    avg_cadence: ?u8 = null,
+    max_cadence: ?u8 = null,
+    min_heart_rate: ?u8 = null,
+    max_heart_rate: ?u8 = null,
+    avg_heart_rate: ?u8 = null,
+    min_altitude: ?u16 = null,
+    max_altitude: ?u16 = null,
+    avg_altitude: ?u32 = null,
+    max_neg_grade: ?i16 = null,
+    avg_grade: ?i16 = null,
+    max_pos_grade: ?i16 = null,
+    total_calories: ?u16 = null,
+    avg_temperature: ?i8 = null,
+    max_temperature: ?i8 = null,
+    total_ascent: ?u16 = null,
+    total_descent: ?u16 = null,
+
+    const Self = @This();
+
+    pub fn fromSession(path: []const u8, session: *const fit.Session) Self {
+        const filename = std.fs.path.basename(path);
+        return .{
+            .name = filename,
+            .start_time = session.start_time + fit.GARMIN_EPOCH,
+            .total_elapsed_time = session.total_elapsed_time,
+            .total_timer_time = session.total_timer_time,
+            .avg_speed = session.avg_speed,
+            .max_speed = session.max_speed,
+            .total_distance = session.total_distance,
+            .avg_cadence = session.avg_cadence,
+            .max_cadence = session.max_cadence,
+            .min_heart_rate = session.min_heart_rate,
+            .max_heart_rate = session.max_heart_rate,
+            .avg_heart_rate = session.avg_heart_rate,
+            .min_altitude = session.min_altitude,
+            .max_altitude = session.max_altitude,
+            .avg_altitude = session.avg_altitude,
+            .max_neg_grade = session.max_neg_grade,
+            .avg_grade = session.avg_grade,
+            .max_pos_grade = session.max_pos_grade,
+            .total_calories = session.total_calories,
+            .avg_temperature = session.avg_temperature,
+            .max_temperature = session.max_temperature,
+            .total_ascent = session.total_ascent,
+            .total_descent = session.total_descent,
+        };
+    }
+};
+
+/// Searches the db for a matching activity based on (name, start_time) or
+/// (start_time, distance) in case you renamed it.
+pub fn activityExists(db: *sqlite.Db, activity: *const Activity) !bool {
+    @setEvalBranchQuota(5000);
+
+    var stmt = try db.prepare(EXISTS_ACTIVITY);
+    defer stmt.deinit();
+    const row = try stmt.one(usize, .{}, .{ activity.name, activity.total_distance, activity.start_time });
+    if (row) |a| {
+        return true;
+    }
+    return false;
+}
+
+pub fn insertActivity(db: *sqlite.Db, activity: *const Activity) !void {
+    @setEvalBranchQuota(5000);
+
+    const exists = try activityExists(db, activity);
+    if (exists) return error.AlreadyExists;
+
+    logger.info("inserting activity {s}", .{activity.name});
+    var stmt = try db.prepare(INSERT_ACTIVITY);
+    defer stmt.deinit();
+    try stmt.exec(activity.*);
 }
