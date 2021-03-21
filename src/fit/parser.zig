@@ -9,22 +9,22 @@ pub const Session = struct {
     avg_speed: u16 = 0,
     max_speed: u16 = 0,
     total_distance: u32 = 0,
-    avg_cadence: u8 = 0,
-    max_cadence: u8 = 0,
-    min_heart_rate: u8 = 0,
-    max_heart_rate: u8 = 0,
-    avg_heart_rate: u8 = 0,
-    min_altitude: u16 = 0,
-    max_altitude: u16 = 0,
-    avg_altitude: u32 = 0,
-    max_neg_grade: i16 = 0,
-    avg_grade: i16 = 0,
-    max_pos_grade: i16 = 0,
-    total_calories: u16 = 0,
-    avg_temperature: i8 = 0,
-    max_temperature: i8 = 0,
-    total_ascent: u16 = 0,
-    total_descent: u16 = 0,
+    avg_cadence: ?u8 = null,
+    max_cadence: ?u8 = null,
+    min_heart_rate: ?u8 = null,
+    max_heart_rate: ?u8 = null,
+    avg_heart_rate: ?u8 = null,
+    min_altitude: ?u16 = null,
+    max_altitude: ?u16 = null,
+    avg_altitude: ?u32 = null,
+    max_neg_grade: ?i16 = null,
+    avg_grade: ?i16 = null,
+    max_pos_grade: ?i16 = null,
+    total_calories: ?u16 = null,
+    avg_temperature: ?i8 = null,
+    max_temperature: ?i8 = null,
+    total_ascent: ?u16 = null,
+    total_descent: ?u16 = null,
 };
 
 pub const File = struct {
@@ -37,10 +37,11 @@ pub const File = struct {
 fn findFieldsOfType(comptime Struct: type, comptime T: type) [][]const u8 {
     comptime var fields: [16][]const u8 = undefined;
     comptime var i = 0;
+    const optional_t = @Type(.{ .Optional = .{ .child = T } });
     switch (@typeInfo(Struct)) {
         .Struct => |si| {
             inline for (si.fields) |field| {
-                if (field.field_type == T) {
+                if (field.field_type == T or field.field_type == optional_t) {
                     fields[i] = field.name;
                     i += 1;
                     if (i == 16) {

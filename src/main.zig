@@ -186,10 +186,10 @@ const ListView = struct {
         try parseVal(f32, .time, file.session.total_timer_time).printTime(writer, "Moving time: {s}\n");
         try parseVal(f32, .time, file.session.total_elapsed_time).printTime(writer, "Total time: {s}\n");
         try parseVal(f32, .speed, file.session.avg_speed).printUnit(writer, "Avg speed: {d:.2}{s}\n", .mph);
-        try parseVal(f16, .frequency, file.session.avg_heart_rate).printUnit(writer, "Avg heart rate: {d:.0}{s}\n", .bpm);
-        try parseVal(f16, .frequency, file.session.min_heart_rate).printUnit(writer, "Min heart rate: {d:.0}{s}\n", .bpm);
-        try parseVal(f16, .frequency, file.session.max_heart_rate).printUnit(writer, "Max heart rate: {d:.0}{s}\n", .bpm);
-        try parseVal(f16, .temperature, file.session.avg_temperature).printUnit(writer, "Avg temperature: {d:.0}{s}\n", .celcius);
+        try parseVal(f16, .frequency, file.session.avg_heart_rate.?).printUnit(writer, "Avg heart rate: {d:.0}{s}\n", .bpm);
+        try parseVal(f16, .frequency, file.session.min_heart_rate.?).printUnit(writer, "Min heart rate: {d:.0}{s}\n", .bpm);
+        try parseVal(f16, .frequency, file.session.max_heart_rate.?).printUnit(writer, "Max heart rate: {d:.0}{s}\n", .bpm);
+        try parseVal(f16, .temperature, file.session.avg_temperature.?).printUnit(writer, "Avg temperature: {d:.0}{s}\n", .celcius);
         output.blit(self.rest, 1, @intCast(isize, list_width + 2));
         try ui.drawBoxRect(output, 0, list_width + 1, size.height, list_width * 2 - 1);
     }
