@@ -67,7 +67,14 @@ const INSERT_ACTIVITY =
     \\  total_ascent, total_descent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 ;
 
-const GET_ACTIVITY = "SELECT * FROM activity WHERE name = ? AND start_time = ? LIMIT 1;";
+const GET_ACTIVITIES =
+    \\SELECT name, start_time, total_elapsed_time, total_timer_time, avg_speed, max_speed,
+    \\  total_distance, avg_cadence, max_cadence, min_heart_rate, max_heart_rate, avg_heart_rate, min_altitude, max_altitude,
+    \\  avg_altitude, max_neg_grade, avg_grade, max_pos_grade, total_calories, avg_temperature, max_temperature,
+    \\  total_ascent, total_descent
+    \\FROM activity ORDER BY start_time DESC;
+;
+
 const EXISTS_ACTIVITY = "SELECT start_time FROM activity WHERE (name = ? OR total_distance = ?) AND start_time = ? LIMIT 1;";
 
 fn create(db: *sqlite.Db) !void {
@@ -162,38 +169,37 @@ pub const Activity = struct {
     max_temperature: ?i8 = null,
     total_ascent: ?u16 = null,
     total_descent: ?u16 = null,
-
-    const Self = @This();
-
-    pub fn fromSession(path: []const u8, session: *const fit.Session) Self {
-        const filename = std.fs.path.basename(path);
-        return .{
-            .name = filename,
-            .start_time = session.start_time + fit.GARMIN_EPOCH,
-            .total_elapsed_time = session.total_elapsed_time,
-            .total_timer_time = session.total_timer_time,
-            .avg_speed = session.avg_speed,
-            .max_speed = session.max_speed,
-            .total_distance = session.total_distance,
-            .avg_cadence = session.avg_cadence,
-            .max_cadence = session.max_cadence,
-            .min_heart_rate = session.min_heart_rate,
-            .max_heart_rate = session.max_heart_rate,
-            .avg_heart_rate = session.avg_heart_rate,
-            .min_altitude = session.min_altitude,
-            .max_altitude = session.max_altitude,
-            .avg_altitude = session.avg_altitude,
-            .max_neg_grade = session.max_neg_grade,
-            .avg_grade = session.avg_grade,
-            .max_pos_grade = session.max_pos_grade,
-            .total_calories = session.total_calories,
-            .avg_temperature = session.avg_temperature,
-            .max_temperature = session.max_temperature,
-            .total_ascent = session.total_ascent,
-            .total_descent = session.total_descent,
-        };
-    }
 };
+
+// This should be in the struct above but it causes the Zig compiler to crash :'(
+pub fn activityFromSession(path: []const u8, session: *const fit.Session) Activity {
+    const filename = std.fs.path.basename(path);
+    return .{
+        .name = filename,
+        .start_time = session.start_time + fit.GARMIN_EPOCH,
+        .total_elapsed_time = session.total_elapsed_time,
+        .total_timer_time = session.total_timer_time,
+        .avg_speed = session.avg_speed,
+        .max_speed = session.max_speed,
+        .total_distance = session.total_distance,
+        .avg_cadence = session.avg_cadence,
+        .max_cadence = session.max_cadence,
+        .min_heart_rate = session.min_heart_rate,
+        .max_heart_rate = session.max_heart_rate,
+        .avg_heart_rate = session.avg_heart_rate,
+        .min_altitude = session.min_altitude,
+        .max_altitude = session.max_altitude,
+        .avg_altitude = session.avg_altitude,
+        .max_neg_grade = session.max_neg_grade,
+        .avg_grade = session.avg_grade,
+        .max_pos_grade = session.max_pos_grade,
+        .total_calories = session.total_calories,
+        .avg_temperature = session.avg_temperature,
+        .max_temperature = session.max_temperature,
+        .total_ascent = session.total_ascent,
+        .total_descent = session.total_descent,
+    };
+}
 
 /// Searches the db for a matching activity based on (name, start_time) or
 /// (start_time, distance) in case you renamed it.
@@ -219,4 +225,13 @@ pub fn insertActivity(db: *sqlite.Db, activity: *const Activity) !void {
     var stmt = try db.prepare(INSERT_ACTIVITY);
     defer stmt.deinit();
     try stmt.exec(activity.*);
+}
+
+pub fn getActivities(db: *sqlite.Db, allocator: *std.mem.Allocator) callconv(.Inline) ![]Activity {
+    @setEvalBranchQuota(5000);
+
+    var stmt = try db.prepare(GET_ACTIVITIES);
+    defer stmt.deinit();
+
+    return stmt.all(Activity, allocator, .{}, .{});
 }

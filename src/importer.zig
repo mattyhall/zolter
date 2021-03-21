@@ -22,7 +22,7 @@ pub fn main() !void {
         defer f.close();
         var reader = std.io.bufferedReader(f.reader()).reader();
         const file = try fit.Parser.parse_reader(&gpa.allocator, reader);
-        const activity = db.Activity.fromSession(path, &file.session);
+        const activity = db.activityFromSession(path, &file.session);
 
         db.insertActivity(&cache, &activity) catch |e| {
             switch (e) {

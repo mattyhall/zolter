@@ -21,7 +21,9 @@ pub fn build(b: *std.build.Builder) !void {
     const exe = b.addExecutable("zolt", "src/main.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
+    exe.addIncludeDir(sqlite_dir);
     pkgs.addAllTo(exe);
+    exe.linkLibrary(sqlite);
     exe.install();
 
     const run_cmd = exe.run();

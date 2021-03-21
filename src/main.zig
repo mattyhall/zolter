@@ -1,6 +1,7 @@
 const std = @import("std");
 const fit = @import("fit/fit.zig");
 const ui = @import("ui.zig");
+const db = @import("db.zig");
 const units = @import("units.zig");
 const zbox = @import("zbox");
 const dt = @import("datetime");
@@ -156,17 +157,17 @@ const ListView = struct {
     allocator: *std.mem.Allocator,
     list: ui.List,
     rest: zbox.Buffer,
-    paths: [][]const u8,
-    files: []const fit.File,
+    names: [][]const u8,
+    activities: []const db.Activity,
 
     const Self = @This();
 
-    fn init(allocator: *std.mem.Allocator, paths: [][]const u8, files: []const fit.File) !Self {
+    fn init(allocator: *std.mem.Allocator, names: [][]const u8, activities: []const db.Activity) !Self {
         const size = try zbox.size();
-        var list = try ui.List.init(allocator, paths);
+        var list = try ui.List.init(allocator, names);
         var rest = try zbox.Buffer.init(allocator, size.height, 2 * size.width / 3);
 
-        return Self{ .allocator = allocator, .list = list, .rest = rest, .paths = paths, .files = files };
+        return Self{ .allocator = allocator, .list = list, .rest = rest, .names = names, .activities = activities };
     }
 
     fn draw(self: *Self, output: *zbox.Buffer) !void {
@@ -178,19 +179,29 @@ const ListView = struct {
 
         self.rest.clear();
         try self.rest.resize(size.height - 2, list_width * 2 - 3);
-        const file = &self.files[self.list.selected];
-        var cursor = self.rest.wrappedCursorAt(0, 0);
-        var writer = cursor.writer();
-        try writer.print("{s}\n", .{self.paths[self.list.selected]});
-        try parseVal(f32, .distance, file.session.total_distance).printUnit(writer, "Distance: {d:.2}{s}\n", .miles);
-        try parseVal(f32, .time, file.session.total_timer_time).printTime(writer, "Moving time: {s}\n");
-        try parseVal(f32, .time, file.session.total_elapsed_time).printTime(writer, "Total time: {s}\n");
-        try parseVal(f32, .speed, file.session.avg_speed).printUnit(writer, "Avg speed: {d:.2}{s}\n", .mph);
-        try parseVal(f16, .frequency, file.session.avg_heart_rate.?).printUnit(writer, "Avg heart rate: {d:.0}{s}\n", .bpm);
-        try parseVal(f16, .frequency, file.session.min_heart_rate.?).printUnit(writer, "Min heart rate: {d:.0}{s}\n", .bpm);
-        try parseVal(f16, .frequency, file.session.max_heart_rate.?).printUnit(writer, "Max heart rate: {d:.0}{s}\n", .bpm);
-        try parseVal(f16, .temperature, file.session.avg_temperature.?).printUnit(writer, "Avg temperature: {d:.0}{s}\n", .celcius);
-        output.blit(self.rest, 1, @intCast(isize, list_width + 2));
+        if (self.activities.len != 0) {
+            const activity = &self.activities[self.list.selected];
+            var cursor = self.rest.wrappedCursorAt(0, 0);
+            var writer = cursor.writer();
+            try writer.print("{s}\n", .{self.names[self.list.selected]});
+            try parseVal(f32, .distance, activity.total_distance).printUnit(writer, "Distance: {d:.2}{s}\n", .miles);
+            try parseVal(f32, .time, activity.total_timer_time).printTime(writer, "Moving time: {s}\n");
+            try parseVal(f32, .time, activity.total_elapsed_time).printTime(writer, "Total time: {s}\n");
+            try parseVal(f32, .speed, activity.avg_speed).printUnit(writer, "Avg speed: {d:.2}{s}\n", .mph);
+            if (activity.avg_heart_rate) |val| {
+                try parseVal(f16, .frequency, val).printUnit(writer, "Avg heart rate: {d:.0}{s}\n", .bpm);
+            }
+            if (activity.min_heart_rate) |val| {
+                try parseVal(f16, .frequency, val).printUnit(writer, "Min heart rate: {d:.0}{s}\n", .bpm);
+            }
+            if (activity.max_heart_rate) |val| {
+                try parseVal(f16, .frequency, val).printUnit(writer, "Max heart rate: {d:.0}{s}\n", .bpm);
+            }
+            if (activity.avg_temperature) |val| {
+                try parseVal(f16, .temperature, val).printUnit(writer, "Avg temperature: {d:.0}{s}\n", .celcius);
+            }
+            output.blit(self.rest, 1, @intCast(isize, list_width + 2));
+        }
         try ui.drawBoxRect(output, 0, list_width + 1, size.height, list_width * 2 - 1);
     }
 
@@ -224,48 +235,29 @@ fn getLinesMaxLen(lines: []const []const u8) usize {
 const View = enum {
     help,
     summary,
-    files,
+    activities_list,
 };
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
-    std.log.debug("path: {s}", .{PATH});
+    var cache = try db.openDb();
 
-    var walker = try std.fs.walkPath(&gpa.allocator, PATH);
-    defer walker.deinit();
+    var names = std.ArrayList([]const u8).init(&gpa.allocator);
+    defer names.deinit();
 
-    var files_and_paths = std.ArrayList(FileAndPath).init(&gpa.allocator);
-
-    while (try walker.next()) |node| {
-        const path = try gpa.allocator.alloc(u8, node.path.len);
-        std.mem.copy(u8, path, node.path);
-
-        var f = try std.fs.openFileAbsolute(path, .{});
-        defer f.close();
-        var reader = std.io.bufferedReader(f.reader()).reader();
-        const file = try fit.Parser.parse_reader(&gpa.allocator, reader);
-        try files_and_paths.append(.{ .path = path, .file = file });
-    }
-
-    std.sort.sort(FileAndPath, files_and_paths.items, {}, sort);
-
-    var paths = std.ArrayList([]const u8).init(&gpa.allocator);
+    var activities = try db.getActivities(&cache, &gpa.allocator);
     defer {
-        for (paths.items) |p| {
-            gpa.allocator.free(p);
+        for (activities) |a| {
+            gpa.allocator.free(a.name);
         }
-        paths.deinit();
+        gpa.allocator.free(activities);
     }
-    var files = std.ArrayList(fit.File).init(&gpa.allocator);
-    defer files.deinit();
 
-    for (files_and_paths.items) |*fp| {
-        try paths.append(fp.path);
-        try files.append(fp.file);
+    for (activities) |a| {
+        try names.append(a.name);
     }
-    files_and_paths.deinit();
 
     try zbox.init(&gpa.allocator);
     defer zbox.deinit();
@@ -280,13 +272,13 @@ pub fn main() !void {
     var output = try zbox.Buffer.init(&gpa.allocator, size.height, size.width);
     defer output.deinit();
 
-    var list_view = try ListView.init(&gpa.allocator, paths.items, files.items);
+    var list_view = try ListView.init(&gpa.allocator, names.items, activities);
     defer list_view.deinit();
 
-    var distances_by_month = try getDistancesByMonth(&gpa.allocator, files.items);
-    defer distances_by_month.deinit();
-    var distances_by_year = try getDistancesByYear(&gpa.allocator, files.items);
-    defer distances_by_year.deinit();
+    // var distances_by_month = try getDistancesByMonth(&gpa.allocator, files.items);
+    // defer distances_by_month.deinit();
+    // var distances_by_year = try getDistancesByYear(&gpa.allocator, files.items);
+    // defer distances_by_year.deinit();
 
     var left = try zbox.Buffer.init(&gpa.allocator, size.height, size.width / 2);
     defer left.deinit();
@@ -316,16 +308,16 @@ pub fn main() !void {
 
                 try ui.drawBoxRect(&output, 0, 1, output.height, output.width - 1);
             },
-            .files => try list_view.draw(&output),
+            .activities_list => try list_view.draw(&output),
             .summary => {
-                const width = size.width / 2;
-                try left.resize(size.height, width);
-                try right.resize(size.height, width);
-                try distances_by_month.draw(&left, size.height, width);
-                try distances_by_year.draw(&right, size.height, width);
+                // const width = size.width / 2;
+                // try left.resize(size.height, width);
+                // try right.resize(size.height, width);
+                // try distances_by_month.draw(&left, size.height, width);
+                // try distances_by_year.draw(&right, size.height, width);
 
-                output.blit(left, 0, 0);
-                output.blit(right, 0, @intCast(isize, width));
+                // output.blit(left, 0, 0);
+                // output.blit(right, 0, @intCast(isize, width));
             },
         }
 
@@ -339,7 +331,7 @@ pub fn main() !void {
                 } else if (std.mem.eql(u8, "\x1bOQ", s)) {
                     view = .summary;
                 } else if (std.mem.eql(u8, "\x1bOR", s)) {
-                    view = .files;
+                    view = .activities_list;
                 }
             },
             else => list_view.handleInput(e),
