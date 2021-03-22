@@ -5,6 +5,7 @@ const db = @import("db.zig");
 const units = @import("units.zig");
 const zbox = @import("zbox");
 const dt = @import("datetime");
+const sqlite = @import("sqlite");
 
 usingnamespace @import("log_handler.zig");
 
@@ -60,7 +61,7 @@ const BarGraph = struct {
 
     // TODO: just take a buffer here and use its width and height
     fn draw(self: *const Self, output: *zbox.Buffer, height: usize, width: usize) !void {
-        const each_column_val = self.max_val / @intToFloat(f32, width - self.max_label_cols - 3);
+        const each_column_val = self.max_val / @intToFloat(f32, width - self.max_label_cols - 4);
         var cursor = output.cursorAt(0, 0);
         for (self.values.items) |bar| {
             try cursor.writer().print(" {s} ", .{bar.x_label});
@@ -89,66 +90,18 @@ const BarGraph = struct {
     }
 };
 
-fn getDistancesByMonth(allocator: *std.mem.Allocator, files: []const fit.File) !BarGraph {
-    var last_date = dt.Date.fromSeconds(0);
-    var val: u32 = 0;
-    var bar_graph = BarGraph.init(allocator);
-    for (files) |f| {
-        const corrected_ts = f.session.start_time + fit.GARMIN_EPOCH;
-        const datetime = dt.Date.fromSeconds(@intToFloat(f64, corrected_ts));
-        const start_of_month = datetime.shiftDays(-@intCast(i16, datetime.day - 1));
-        if (!start_of_month.eql(last_date)) {
-            if (last_date.toSeconds() != 0) {
-                const miles = try parseVal(f32, .distance, val).toUnit(.miles);
-                try bar_graph.add(" {d:0>2}/{d:0>2}", .{
-                    last_date.month,
-                    last_date.year - 2000,
-                }, miles, "{d:.2}{s}", .{
-                    miles,
-                    units.Unit.miles.toString(),
-                });
-            }
-
-            last_date = start_of_month;
-            val = f.session.total_distance;
-            continue;
+fn getDistancesBy(period: []const u8, allocator: *std.mem.Allocator, cache: *sqlite.Db) !BarGraph {
+    var distances_by_month = try db.getDistanceByTimePeriod(cache, allocator, period);
+    defer {
+        for (distances_by_month) |dbm| {
+            allocator.free(dbm.period);
         }
-        val += f.session.total_distance;
+        allocator.free(distances_by_month);
     }
-    return bar_graph;
-}
-
-fn getDistancesByYear(allocator: *std.mem.Allocator, files: []const fit.File) !BarGraph {
-    var last_date = dt.Date.fromSeconds(0);
-    var val: u32 = 0;
     var bar_graph = BarGraph.init(allocator);
-    for (files) |f| {
-        const corrected_ts = f.session.start_time + fit.GARMIN_EPOCH;
-        var datetime = dt.Date.fromSeconds(@intToFloat(f64, corrected_ts));
-        datetime.day = 1;
-        datetime.month = 1;
-        if (!datetime.eql(last_date)) {
-            if (last_date.toSeconds() != 0) {
-                const miles = try parseVal(f32, .distance, val).toUnit(.miles);
-                try bar_graph.add(" {} ", .{last_date.year}, miles, "{d:.2}{s}", .{
-                    miles,
-                    units.Unit.miles.toString(),
-                });
-            }
-
-            last_date = datetime;
-            val = f.session.total_distance;
-            continue;
-        }
-        val += f.session.total_distance;
-    }
-
-    if (last_date.toSeconds() != 0) {
-        const miles = try parseVal(f32, .distance, val).toUnit(.miles);
-        try bar_graph.add(" {} ", .{last_date.year}, miles, "{d:.2}{s}", .{
-            miles,
-            units.Unit.miles.toString(),
-        });
+    for (distances_by_month) |dbm| {
+        const miles = try parseVal(f32, .distance, dbm.distance).toUnit(.miles);
+        try bar_graph.add("{s}", .{dbm.period}, miles, "{d:.2}{s}", .{ miles, units.Unit.miles.toString() });
     }
     return bar_graph;
 }
@@ -275,10 +228,10 @@ pub fn main() !void {
     var list_view = try ListView.init(&gpa.allocator, names.items, activities);
     defer list_view.deinit();
 
-    // var distances_by_month = try getDistancesByMonth(&gpa.allocator, files.items);
-    // defer distances_by_month.deinit();
-    // var distances_by_year = try getDistancesByYear(&gpa.allocator, files.items);
-    // defer distances_by_year.deinit();
+    var distances_by_month = try getDistancesBy("%Y-%m", &gpa.allocator, &cache);
+    defer distances_by_month.deinit();
+    var distances_by_year = try getDistancesBy("%Y", &gpa.allocator, &cache);
+    defer distances_by_year.deinit();
 
     var left = try zbox.Buffer.init(&gpa.allocator, size.height, size.width / 2);
     defer left.deinit();
@@ -310,14 +263,14 @@ pub fn main() !void {
             },
             .activities_list => try list_view.draw(&output),
             .summary => {
-                // const width = size.width / 2;
-                // try left.resize(size.height, width);
-                // try right.resize(size.height, width);
-                // try distances_by_month.draw(&left, size.height, width);
-                // try distances_by_year.draw(&right, size.height, width);
+                const width = size.width / 2;
+                try left.resize(size.height, width);
+                try right.resize(size.height, width);
+                try distances_by_month.draw(&left, size.height, width);
+                try distances_by_year.draw(&right, size.height, width);
 
-                // output.blit(left, 0, 0);
-                // output.blit(right, 0, @intCast(isize, width));
+                output.blit(left, 0, 0);
+                output.blit(right, 0, @intCast(isize, width));
             },
         }
 

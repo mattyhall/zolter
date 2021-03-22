@@ -77,6 +77,13 @@ const GET_ACTIVITIES =
 
 const EXISTS_ACTIVITY = "SELECT start_time FROM activity WHERE (name = ? OR total_distance = ?) AND start_time = ? LIMIT 1;";
 
+const GROUPED_BY_TIME_ACTIVITIES =
+    \\SELECT strftime(?, datetime(start_time, 'unixepoch')), SUM(total_distance) 
+    \\FROM activity
+    \\GROUP BY strftime(?, datetime(start_time, 'unixepoch'))
+    \\ORDER BY start_time DESC
+;
+
 fn create(db: *sqlite.Db) !void {
     @setEvalBranchQuota(5000);
 
@@ -227,11 +234,25 @@ pub fn insertActivity(db: *sqlite.Db, activity: *const Activity) !void {
     try stmt.exec(activity.*);
 }
 
-pub fn getActivities(db: *sqlite.Db, allocator: *std.mem.Allocator) callconv(.Inline) ![]Activity {
+pub fn getActivities(db: *sqlite.Db, allocator: *std.mem.Allocator) ![]Activity {
     @setEvalBranchQuota(5000);
 
     var stmt = try db.prepare(GET_ACTIVITIES);
     defer stmt.deinit();
 
     return stmt.all(Activity, allocator, .{}, .{});
+}
+
+pub const PeriodAndDistance = struct {
+    period: []const u8,
+    distance: usize,
+};
+
+pub fn getDistanceByTimePeriod(db: *sqlite.Db, allocator: *std.mem.Allocator, period: []const u8) ![]PeriodAndDistance {
+    @setEvalBranchQuota(5000);
+
+    var stmt = try db.prepare(GROUPED_BY_TIME_ACTIVITIES);
+    defer stmt.deinit();
+
+    return stmt.all(PeriodAndDistance, allocator, .{}, .{ period, period });
 }
