@@ -7,9 +7,16 @@ deps:
         repo: zbox
         ref: master
   sqlite:
+    root: sqlite.zig
     src:
       github:
         user: vrischmann
         repo: zig-sqlite
         ref: master
-    root: sqlite.zig
+  clap:
+    root: clap.zig
+    src:
+      github:
+        user: Hejsil
+        repo: zig-clap
+        ref: zig-master

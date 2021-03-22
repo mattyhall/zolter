@@ -1,11 +1,44 @@
 const std = @import("std");
 const ui = @import("ui.zig");
 const db = @import("db.zig");
+const fit = @import("fit/fit.zig");
 const units = @import("units.zig");
 const zbox = @import("zbox");
 const sqlite = @import("sqlite");
+const clap = @import("clap");
 
 usingnamespace @import("log_handler.zig");
+
+fn import(allocator: *std.mem.Allocator, cache: *sqlite.Db, base_path: []const u8) !void {
+    var last_index = base_path.len;
+    if (base_path[last_index - 1] == '/') {
+        last_index -= 1;
+    }
+    std.log.debug("got base path: {s}", .{base_path});
+    var walker = try std.fs.walkPath(allocator, base_path[0..last_index]);
+    defer walker.deinit();
+
+    while (try walker.next()) |node| {
+        var f = try std.fs.openFileAbsolute(node.path, .{});
+        defer f.close();
+        std.log.debug("got path: {s}", .{node.path});
+        var reader = std.io.bufferedReader(f.reader()).reader();
+        const file = try fit.Parser.parse_reader(allocator, reader);
+        const activity = db.activityFromSession(node.path, &file.session);
+
+        db.insertActivity(cache, &activity) catch |e| {
+            switch (e) {
+                error.AlreadyExists => {
+                    try std.io.getStdOut().writer().print("Skipped {s}\n", .{node.path});
+                    continue;
+                },
+                else => return e,
+            }
+        };
+
+        try std.io.getStdOut().writer().print("Imported {s}\n", .{node.path});
+    }
+}
 
 fn parseVal(comptime T: type, comptime metric: units.Metric, value: anytype) units.UnittedType(T, metric.standard()) {
     const v = @intToFloat(T, value);
@@ -118,6 +151,24 @@ pub fn main() !void {
     defer _ = gpa.deinit();
 
     var cache = try db.openDb();
+
+    const params = comptime [_]clap.Param(clap.Help){
+        clap.parseParam("-h, --help             Display this help and exit.              ") catch unreachable,
+        clap.parseParam("-i <PATH>              Imports fit files from PATH") catch unreachable,
+    };
+
+    var diag: clap.Diagnostic = undefined;
+    var args = clap.parse(clap.Help, &params, &gpa.allocator, &diag) catch |err| {
+        // Report useful error and exit
+        diag.report(std.io.getStdErr().writer(), err) catch {};
+        return err;
+    };
+    defer args.deinit();
+
+    if (args.option("-i")) |path| {
+        try import(&gpa.allocator, &cache, path);
+        return;
+    }
 
     var names = std.ArrayList([]const u8).init(&gpa.allocator);
     defer names.deinit();

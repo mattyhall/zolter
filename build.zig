@@ -36,12 +36,4 @@ pub fn build(b: *std.build.Builder) !void {
     dump_exe.setTarget(target);
     dump_exe.setBuildMode(mode);
     dump_exe.install();
-
-    const importer_exe = b.addExecutable("import", "src/importer.zig");
-    importer_exe.setTarget(target);
-    importer_exe.setBuildMode(mode);
-    importer_exe.addIncludeDir(sqlite_dir);
-    pkgs.addAllTo(importer_exe);
-    importer_exe.linkLibrary(sqlite);
-    importer_exe.install();
 }
