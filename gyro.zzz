@@ -6,13 +6,6 @@ deps:
         user: jessrud
         repo: zbox
         ref: master
-  datetime:
-    root: datetime.zig
-    src:
-      github:
-        user: frmdstryr
-        repo: zig-datetime
-        ref: master
   sqlite:
     src:
       github:
