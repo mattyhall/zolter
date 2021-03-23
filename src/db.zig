@@ -59,6 +59,7 @@ const TABLES: [2][]const u8 = .{
 
 const SET_SETTING = "INSERT INTO settings (key, value) VALUES (?, ?);";
 const GET_SETTING = "SELECT value FROM settings WHERE key=?;";
+const GET_SETTINGS = "SELECT key, value FROM settings;";
 
 const INSERT_ACTIVITY =
     \\INSERT INTO activity (name, start_time, total_elapsed_time, total_timer_time, avg_speed, max_speed, 
@@ -255,4 +256,26 @@ pub fn getDistanceByTimePeriod(db: *sqlite.Db, allocator: *std.mem.Allocator, pe
     defer stmt.deinit();
 
     return stmt.all(PeriodAndDistance, allocator, .{}, .{ period, period });
+}
+
+pub fn getSettings(db: *sqlite.Db, allocator: *std.mem.Allocator) ![]Setting {
+    @setEvalBranchQuota(5000);
+
+    const SettingWeak = struct { key: usize, value: usize };
+
+    var settings = std.ArrayList(Setting).init(allocator);
+
+    var stmt = try db.prepare(GET_SETTINGS);
+    defer stmt.deinit();
+
+    var iter = try stmt.iterator(SettingWeak, .{});
+    while (try iter.next(.{})) |setting| {
+        const key = try std.meta.intToEnum(SettingKey, setting.key);
+        try settings.append(.{
+            .key = key,
+            .value = setting.value,
+        });
+    }
+
+    return settings.toOwnedSlice();
 }

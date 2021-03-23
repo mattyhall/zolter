@@ -9,6 +9,29 @@ const clap = @import("clap");
 
 usingnamespace @import("log_handler.zig");
 
+const UserSettings = struct {
+    distance_unit: units.Unit,
+    speed_unit: units.Unit,
+    temperature_unit: units.Unit,
+};
+
+fn getUserSettings(cached: *sqlite.Db, allocator: *std.mem.Allocator) !UserSettings {
+    var user_settings: UserSettings = undefined;
+
+    var settings = try db.getSettings(cached, allocator);
+    defer allocator.free(settings);
+
+    for (settings) |setting| {
+        switch (setting.key) {
+            .distance_unit => user_settings.distance_unit = try std.meta.intToEnum(units.Unit, setting.value),
+            .speed_unit => user_settings.speed_unit = try std.meta.intToEnum(units.Unit, setting.value),
+            .temperature_unit => user_settings.temperature_unit = try std.meta.intToEnum(units.Unit, setting.value),
+            else => {},
+        }
+    }
+    return user_settings;
+}
+
 fn import(allocator: *std.mem.Allocator, cache: *sqlite.Db, base_path: []const u8) !void {
     var last_index = base_path.len;
     if (base_path[last_index - 1] == '/') {
@@ -45,7 +68,7 @@ fn parseVal(comptime T: type, comptime metric: units.Metric, value: anytype) uni
     return units.parseVal(T, metric, v);
 }
 
-fn getDistancesBy(period: []const u8, allocator: *std.mem.Allocator, cache: *sqlite.Db) !ui.BarGraph {
+fn getDistancesBy(period: []const u8, allocator: *std.mem.Allocator, cache: *sqlite.Db, settings: *const UserSettings) !ui.BarGraph {
     var distances_by_month = try db.getDistanceByTimePeriod(cache, allocator, period);
     defer {
         for (distances_by_month) |dbm| {
@@ -55,14 +78,15 @@ fn getDistancesBy(period: []const u8, allocator: *std.mem.Allocator, cache: *sql
     }
     var bar_graph = ui.BarGraph.init(allocator);
     for (distances_by_month) |dbm| {
-        const miles = try parseVal(f32, .distance, dbm.distance).toUnit(.miles);
-        try bar_graph.add("{s}", .{dbm.period}, miles, "{d:.2}{s}", .{ miles, units.Unit.miles.toString() });
+        const dist = try parseVal(f32, .distance, dbm.distance).toUnit(settings.distance_unit);
+        try bar_graph.add("{s}", .{dbm.period}, dist, "{d:.2}{s}", .{ dist, settings.distance_unit.toString() });
     }
     return bar_graph;
 }
 
 const ListView = struct {
     allocator: *std.mem.Allocator,
+    settings: *const UserSettings,
     list: ui.List,
     rest: zbox.Buffer,
     names: [][]const u8,
@@ -70,12 +94,19 @@ const ListView = struct {
 
     const Self = @This();
 
-    fn init(allocator: *std.mem.Allocator, names: [][]const u8, activities: []const db.Activity) !Self {
+    fn init(allocator: *std.mem.Allocator, settings: *const UserSettings, names: [][]const u8, activities: []const db.Activity) !Self {
         const size = try zbox.size();
         var list = try ui.List.init(allocator, names);
         var rest = try zbox.Buffer.init(allocator, size.height, 2 * size.width / 3);
 
-        return Self{ .allocator = allocator, .list = list, .rest = rest, .names = names, .activities = activities };
+        return Self{
+            .allocator = allocator,
+            .settings = settings,
+            .list = list,
+            .rest = rest,
+            .names = names,
+            .activities = activities,
+        };
     }
 
     fn draw(self: *Self, output: *zbox.Buffer) !void {
@@ -92,10 +123,10 @@ const ListView = struct {
             var cursor = self.rest.wrappedCursorAt(0, 0);
             var writer = cursor.writer();
             try writer.print("{s}\n", .{self.names[self.list.selected]});
-            try parseVal(f32, .distance, activity.total_distance).printUnit(writer, "Distance: {d:.2}{s}\n", .miles);
+            try parseVal(f32, .distance, activity.total_distance).printUnit(writer, "Distance: {d:.2}{s}\n", self.settings.distance_unit);
             try parseVal(f32, .time, activity.total_timer_time).printTime(writer, "Moving time: {s}\n");
             try parseVal(f32, .time, activity.total_elapsed_time).printTime(writer, "Total time: {s}\n");
-            try parseVal(f32, .speed, activity.avg_speed).printUnit(writer, "Avg speed: {d:.2}{s}\n", .mph);
+            try parseVal(f32, .speed, activity.avg_speed).printUnit(writer, "Avg speed: {d:.2}{s}\n", self.settings.speed_unit);
             if (activity.avg_heart_rate) |val| {
                 try parseVal(f16, .frequency, val).printUnit(writer, "Avg heart rate: {d:.0}{s}\n", .bpm);
             }
@@ -106,7 +137,7 @@ const ListView = struct {
                 try parseVal(f16, .frequency, val).printUnit(writer, "Max heart rate: {d:.0}{s}\n", .bpm);
             }
             if (activity.avg_temperature) |val| {
-                try parseVal(f16, .temperature, val).printUnit(writer, "Avg temperature: {d:.0}{s}\n", .celcius);
+                try parseVal(f16, .temperature, val).printUnit(writer, "Avg temperature: {d:.0}{s}\n", self.settings.temperature_unit);
             }
             output.blit(self.rest, 1, @intCast(isize, list_width + 2));
         }
@@ -192,18 +223,21 @@ pub fn main() !void {
     try zbox.cursorHide();
     defer zbox.cursorShow() catch {};
 
+    const settings = try getUserSettings(&cache, &gpa.allocator);
+    std.log.debug("{}", .{settings});
+
     var size = try zbox.size();
     std.debug.print("size {any} {}", .{ size, size.width / 3 });
 
     var output = try zbox.Buffer.init(&gpa.allocator, size.height, size.width);
     defer output.deinit();
 
-    var list_view = try ListView.init(&gpa.allocator, names.items, activities);
+    var list_view = try ListView.init(&gpa.allocator, &settings, names.items, activities);
     defer list_view.deinit();
 
-    var distances_by_month = try getDistancesBy("%Y-%m", &gpa.allocator, &cache);
+    var distances_by_month = try getDistancesBy("%Y-%m", &gpa.allocator, &cache, &settings);
     defer distances_by_month.deinit();
-    var distances_by_year = try getDistancesBy("%Y", &gpa.allocator, &cache);
+    var distances_by_year = try getDistancesBy("%Y", &gpa.allocator, &cache, &settings);
     defer distances_by_year.deinit();
 
     var left = try zbox.Buffer.init(&gpa.allocator, size.height, size.width / 2);
