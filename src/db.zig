@@ -7,14 +7,14 @@ const logger = std.log.scoped(.db);
 
 const DB_VERSION = 1;
 
-const SettingKey = enum {
+pub const SettingKey = enum {
     db_version,
     distance_unit,
     speed_unit,
     temperature_unit,
 };
 
-const Setting = struct { key: SettingKey, value: usize };
+pub const Setting = struct { key: SettingKey, value: usize };
 
 const SETTING_DEFAULTS: [4]Setting = .{
     .{ .key = .db_version, .value = DB_VERSION },
@@ -57,7 +57,7 @@ const TABLES: [2][]const u8 = .{
     \\  value INTEGER NOT NULL);
 };
 
-const SET_SETTING = "INSERT INTO settings (key, value) VALUES (?, ?);";
+const SET_SETTING = "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?);";
 const GET_SETTING = "SELECT value FROM settings WHERE key=?;";
 const GET_SETTINGS = "SELECT key, value FROM settings;";
 
@@ -85,6 +85,18 @@ const GROUPED_BY_TIME_ACTIVITIES =
     \\ORDER BY start_time DESC
 ;
 
+pub fn setSettings(db: *sqlite.Db, settings: []const Setting) !void {
+    @setEvalBranchQuota(5000);
+
+    var set_stmt = try db.prepare(SET_SETTING);
+    defer set_stmt.deinit();
+
+    for (settings) |s| {
+        set_stmt.reset();
+        try set_stmt.exec(.{ @enumToInt(s.key), s.value });
+    }
+}
+
 fn create(db: *sqlite.Db) !void {
     @setEvalBranchQuota(5000);
 
@@ -93,14 +105,8 @@ fn create(db: *sqlite.Db) !void {
         try db.exec(tbl, .{});
     }
 
-    var set_stmt = try db.prepare(SET_SETTING);
-    defer set_stmt.deinit();
-
     logger.debug("inserting initial settings", .{});
-    inline for (SETTING_DEFAULTS) |default| {
-        set_stmt.reset();
-        try set_stmt.exec(.{ @enumToInt(default.key), default.value });
-    }
+    try setSettings(db, &SETTING_DEFAULTS);
 }
 
 fn createOrMigrate(db: *sqlite.Db) !void {

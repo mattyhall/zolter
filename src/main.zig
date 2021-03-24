@@ -13,12 +13,25 @@ const UserSettings = struct {
     distance_unit: units.Unit,
     speed_unit: units.Unit,
     temperature_unit: units.Unit,
+    cache: *sqlite.Db,
+
+    const Self = @This();
+
+    fn save(self: *const Self) !void {
+        const settings: [3]db.Setting = .{
+            .{ .key = .distance_unit, .value = @enumToInt(self.distance_unit) },
+            .{ .key = .speed_unit, .value = @enumToInt(self.speed_unit) },
+            .{ .key = .temperature_unit, .value = @enumToInt(self.temperature_unit) },
+        };
+        try db.setSettings(self.cache, &settings);
+    }
 };
 
-fn getUserSettings(cached: *sqlite.Db, allocator: *std.mem.Allocator) !UserSettings {
+fn getUserSettings(cache: *sqlite.Db, allocator: *std.mem.Allocator) !UserSettings {
     var user_settings: UserSettings = undefined;
+    user_settings.cache = cache;
 
-    var settings = try db.getSettings(cached, allocator);
+    var settings = try db.getSettings(cache, allocator);
     defer allocator.free(settings);
 
     for (settings) |setting| {
@@ -154,6 +167,77 @@ const ListView = struct {
     }
 };
 
+const SettingsUI = struct {
+    radios: [3]ui.Radio,
+    selected_radio: usize = 0,
+    settings: *UserSettings,
+
+    const Self = @This();
+
+    const DISTANCE_STRINGS: []const []const u8 = &.{ "meters", "kilometers", "miles" };
+    const DISTANCE_UNITS: []const units.Unit = &.{ .meters, .kilometers, .miles };
+    const SPEED_STRINGS: []const []const u8 = &.{ "ms", "kph", "mph" };
+    const SPEED_UNITS: []const units.Unit = &.{ .ms, .kph, .mph };
+    const TEMP_STRINGS: []const []const u8 = &.{ "celcius", "fahrenheit" };
+    const TEMP_UNITS: []const units.Unit = &.{ .celcius, .fahrenheit };
+
+    fn init(settings: *UserSettings) Self {
+        var self = Self{
+            .radios = .{
+                ui.Radio.init("Distance:", DISTANCE_STRINGS, std.mem.indexOf(units.Unit, DISTANCE_UNITS, &.{settings.distance_unit}).?),
+                ui.Radio.init("Speed:", SPEED_STRINGS, std.mem.indexOf(units.Unit, SPEED_UNITS, &.{settings.speed_unit}).?),
+                ui.Radio.init("Temperature:", TEMP_STRINGS, std.mem.indexOf(units.Unit, TEMP_UNITS, &.{settings.temperature_unit}).?),
+            },
+            .settings = settings,
+        };
+        self.radios[0].focus(true);
+        return self;
+    }
+
+    fn draw(self: *const Self, output: *zbox.Buffer) !void {
+        try ui.drawBoxRect(output, 0, 1, output.height, output.width - 1);
+
+        var cursor = output.cursorAt(1, 2);
+        _ = try cursor.writer().write("Settings");
+
+        var i: usize = 0;
+        while (i < self.radios.len) : (i += 1) {
+            try self.radios[i].draw(output, i + 2, 2);
+        }
+    }
+
+    pub fn handleInput(self: *Self, e: zbox.Event) !void {
+        switch (e) {
+            .up => {
+                self.radios[self.selected_radio].focus(false);
+                if (self.selected_radio == 0) {
+                    self.selected_radio = self.radios.len - 1;
+                } else {
+                    self.selected_radio -= 1;
+                }
+                return;
+            },
+            .down => {
+                self.radios[self.selected_radio].focus(false);
+                if (self.selected_radio == self.radios.len - 1) {
+                    self.selected_radio = 0;
+                } else {
+                    self.selected_radio += 1;
+                }
+                return;
+            },
+            else => {},
+        }
+        self.radios[self.selected_radio].focus(true);
+        if (self.radios[self.selected_radio].handleInput(e)) {
+            self.settings.distance_unit = DISTANCE_UNITS[self.radios[0].selected];
+            self.settings.speed_unit = SPEED_UNITS[self.radios[1].selected];
+            self.settings.temperature_unit = TEMP_UNITS[self.radios[2].selected];
+            try self.settings.save();
+        }
+    }
+};
+
 const HELP_TEXT: [6][]const u8 = .{
     "Welcome to zolter, a program to track your bike rides",
     "",
@@ -175,6 +259,7 @@ const View = enum {
     help,
     summary,
     activities_list,
+    settings,
 };
 
 pub fn main() !void {
@@ -223,7 +308,7 @@ pub fn main() !void {
     try zbox.cursorHide();
     defer zbox.cursorShow() catch {};
 
-    const settings = try getUserSettings(&cache, &gpa.allocator);
+    var settings = try getUserSettings(&cache, &gpa.allocator);
     std.log.debug("{}", .{settings});
 
     var size = try zbox.size();
@@ -244,6 +329,8 @@ pub fn main() !void {
     defer left.deinit();
     var right = try zbox.Buffer.init(&gpa.allocator, size.height, size.width / 2);
     defer right.deinit();
+
+    var settings_view = SettingsUI.init(&settings);
 
     var view = View.help;
 
@@ -279,6 +366,7 @@ pub fn main() !void {
                 output.blit(left, 0, 0);
                 output.blit(right, 0, @intCast(isize, width));
             },
+            .settings => try settings_view.draw(&output),
         }
 
         try zbox.push(output);
@@ -288,13 +376,25 @@ pub fn main() !void {
             .other => |s| {
                 if (std.mem.eql(u8, "\x1bOP", s)) {
                     view = .help;
+                    continue;
                 } else if (std.mem.eql(u8, "\x1bOQ", s)) {
                     view = .summary;
+                    continue;
                 } else if (std.mem.eql(u8, "\x1bOR", s)) {
                     view = .activities_list;
+                    continue;
+                } else if (std.mem.eql(u8, "\x1bOS", s)) {
+                    view = .settings;
+                    continue;
                 }
             },
-            else => list_view.handleInput(e),
+            else => {},
+        }
+
+        switch (view) {
+            .activities_list => list_view.handleInput(e),
+            .settings => _ = try settings_view.handleInput(e),
+            else => {},
         }
     }
 }

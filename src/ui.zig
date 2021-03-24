@@ -180,3 +180,75 @@ pub const BarGraph = struct {
         self.values.deinit();
     }
 };
+
+pub const Radio = struct {
+    label: []const u8,
+    options: []const []const u8,
+    selected: usize,
+    highlighted: usize = 0,
+    focussed: bool = false,
+
+    const Self = @This();
+
+    pub fn init(label: []const u8, options: []const []const u8, selected: usize) Self {
+        return Self{
+            .label = label,
+            .options = options,
+            .selected = selected,
+        };
+    }
+
+    pub fn focus(self: *Self, focussed: bool) void {
+        self.focussed = focussed;
+    }
+
+    pub fn draw(self: *const Self, output: *zbox.Buffer, y: usize, x: usize) !void {
+        var cursor = output.cursorAt(y, x);
+        var i: usize = 0;
+        try cursor.writer().print("{s} ", .{self.label});
+        while (i < self.options.len) : (i += 1) {
+            if (i == self.selected) {
+                if (i == self.highlighted) {
+                    cursor.attribs.fg_cyan = self.focussed;
+                }
+                _ = try cursor.writer().write("■");
+            } else if (i == self.highlighted) {
+                cursor.attribs.fg_cyan = self.focussed;
+                _ = try cursor.writer().write("□");
+            } else {
+                _ = try cursor.writer().write("□");
+            }
+            cursor.attribs.fg_cyan = false;
+            try cursor.writer().print(" {s} ", .{self.options[i]});
+        }
+    }
+
+    pub fn handleInput(self: *Self, e: zbox.Event) bool {
+        if (!self.focussed) return false;
+
+        switch (e) {
+            .left => {
+                if (self.highlighted == 0) {
+                    self.highlighted = self.options.len - 1;
+                } else {
+                    self.highlighted -= 1;
+                }
+            },
+            .right => {
+                if (self.highlighted == self.options.len - 1) {
+                    self.highlighted = 0;
+                } else {
+                    self.highlighted += 1;
+                }
+            },
+            .other => |s| {
+                if (std.mem.eql(u8, s, " ")) {
+                    self.selected = self.highlighted;
+                    return true;
+                }
+            },
+            else => {},
+        }
+        return false;
+    }
+};
