@@ -206,7 +206,7 @@ const SettingsUI = struct {
         }
     }
 
-    pub fn handleInput(self: *Self, e: zbox.Event) !void {
+    pub fn handleInput(self: *Self, e: zbox.Event) !bool {
         switch (e) {
             .up => {
                 self.radios[self.selected_radio].focus(false);
@@ -215,7 +215,7 @@ const SettingsUI = struct {
                 } else {
                     self.selected_radio -= 1;
                 }
-                return;
+                return false;
             },
             .down => {
                 self.radios[self.selected_radio].focus(false);
@@ -224,7 +224,7 @@ const SettingsUI = struct {
                 } else {
                     self.selected_radio += 1;
                 }
-                return;
+                return false;
             },
             else => {},
         }
@@ -234,7 +234,9 @@ const SettingsUI = struct {
             self.settings.speed_unit = SPEED_UNITS[self.radios[1].selected];
             self.settings.temperature_unit = TEMP_UNITS[self.radios[2].selected];
             try self.settings.save();
+            return true;
         }
+        return false;
     }
 };
 
@@ -321,9 +323,7 @@ pub fn main() !void {
     defer list_view.deinit();
 
     var distances_by_month = try getDistancesBy("%Y-%m", &gpa.allocator, &cache, &settings);
-    defer distances_by_month.deinit();
     var distances_by_year = try getDistancesBy("%Y", &gpa.allocator, &cache, &settings);
-    defer distances_by_year.deinit();
 
     var left = try zbox.Buffer.init(&gpa.allocator, size.height, size.width / 2);
     defer left.deinit();
@@ -360,6 +360,8 @@ pub fn main() !void {
                 const width = size.width / 2;
                 try left.resize(size.height, width);
                 try right.resize(size.height, width);
+                left.clear();
+                right.clear();
                 try distances_by_month.draw(&left, size.height, width);
                 try distances_by_year.draw(&right, size.height, width);
 
@@ -393,8 +395,15 @@ pub fn main() !void {
 
         switch (view) {
             .activities_list => list_view.handleInput(e),
-            .settings => _ = try settings_view.handleInput(e),
+            .settings => if (try settings_view.handleInput(e)) {
+                distances_by_month.deinit();
+                distances_by_year.deinit();
+                distances_by_month = try getDistancesBy("%Y-%m", &gpa.allocator, &cache, &settings);
+                distances_by_year = try getDistancesBy("%Y", &gpa.allocator, &cache, &settings);
+            },
             else => {},
         }
     }
+    distances_by_month.deinit();
+    distances_by_year.deinit();
 }
